@@ -316,7 +316,8 @@
     return out;
   })();
 
-  // Telegram-like avatar: coloured circle with a letter; the real photo on top if the person has a public @username
+  // Telegram-like avatar: coloured circle with a letter. A real photo only for the player themself (Telegram gives it
+  // to the game) — other players' @usernames are never sent to the game, for their privacy.
   const AV_COLS = [["#e17076", "#ff885e"], ["#7bc862", "#a2de75"], ["#65aadd", "#7dc1f5"], ["#a695e7", "#c09ff5"],
     ["#ee7aae", "#f78fc1"], ["#6ec9cb", "#82d6d8"], ["#faa774", "#ffbe8a"]];
   function avatar(name, username, size, isMe) {
@@ -329,8 +330,7 @@
     letter.textContent = (chars.find((c) => /\p{L}|\p{N}/u.test(c)) || "?").toUpperCase();
     letter.style.fontSize = Math.round(size * 0.42) + "px";
     d.appendChild(letter);
-    const src = isMe && tgUser && tgUser.photo_url ? tgUser.photo_url
-      : username ? "https://t.me/i/userpic/320/" + encodeURIComponent(username) + ".jpg" : "";
+    const src = isMe && tgUser && tgUser.photo_url ? tgUser.photo_url : "";
     if (src) {
       const img = new Image();
       img.alt = ""; img.referrerPolicy = "no-referrer";
