@@ -20,7 +20,13 @@
     font-family: var(--serif); user-select: none; -webkit-user-select: none; touch-action: none;
     -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-touch-callout: none; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-  #c { cursor: crosshair; }
+  #c { cursor: crosshair; touch-action: none; }
+  /* film grain: a static tile moved by the compositor (no per-frame canvas work); off on weak phones */
+  #grain { position: fixed; inset: -160px; z-index: 2; pointer-events: none; background-size: 160px 160px;
+    will-change: transform; animation: grain .6s steps(1) infinite; }
+  #grain.off { display: none; }
+  @keyframes grain { 0% { transform: translate(0, 0); } 20% { transform: translate(-47px, 31px); } 40% { transform: translate(53px, -71px); }
+    60% { transform: translate(-89px, -23px); } 80% { transform: translate(17px, 97px); } }
   button { touch-action: manipulation; font-family: var(--serif); }
   img { -webkit-user-drag: none; user-select: none; }
   #rotate { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; flex-direction: column;
@@ -222,7 +228,12 @@
     try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
   }
   const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+  // vibration goes through the Telegram bridge — never more often than every 45 ms (a «spirit» pops a dozen at once)
+  let lastHaptic = 0;
   const haptic = (kind) => {
+    const n = performance.now();
+    if (kind !== "error" && kind !== "success" && n - lastHaptic < 45) return;
+    lastHaptic = n;
     try {
       if (!tg || !tg.HapticFeedback) return;
       if (kind === "error" || kind === "success") tg.HapticFeedback.notificationOccurred(kind);
@@ -267,7 +278,7 @@
           if (merged !== local) { store.mem[k] = merged; try { localStorage.setItem(k, JSON.stringify(merged)); } catch (e) {} changed = true; }
           if (merged !== undefined && merged !== remote) { try { cloud.setItem(k, JSON.stringify(merged)); } catch (e) {} }
         }
-        if (changed) { muted = store.get("fs_mute", false); syncMute(); if (!S) refreshMenu(); }
+        if (changed) { setMuted(store.get("fs_mute", false)); syncMute(); if (!S) refreshMenu(); }
       });
     } catch (e) {}
   }
@@ -406,38 +417,98 @@
   }
 
   // ---------- canvas ----------
-  const cv = $("c"), ctx = cv.getContext("2d");
-  // film grain tile
-  const grain = document.createElement("canvas");
-  grain.width = grain.height = 160;
-  (() => {
-    const g = grain.getContext("2d"), id = g.createImageData(160, 160);
+  // opaque canvas: the browser never has to blend it with the page — noticeably cheaper on weak phones
+  const cv = $("c");
+  let ctx = null;
+  try { ctx = cv.getContext("2d", { alpha: false }); } catch (e) {}
+  if (!ctx) ctx = cv.getContext("2d");
+
+  // film grain: one 160×160 tile, shown as a CSS layer the compositor moves (zero canvas cost per frame)
+  const grainEl = document.createElement("div");
+  grainEl.id = "grain";
+  try {
+    const gc = document.createElement("canvas"); gc.width = gc.height = 160;
+    const g = gc.getContext("2d"), id = g.createImageData(160, 160);
     for (let i = 0; i < id.data.length; i += 4) { const v = Math.random() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 16; }
     g.putImageData(id, 0, 0);
-  })();
+    grainEl.style.backgroundImage = `url(${gc.toDataURL()})`;
+  } catch (e) { grainEl.className = "off"; }
+  cv.after(grainEl);
+
+  // Quality ladder. The look is the owner's call: every effect (glows, grain, shards, popups) stays on every step.
+  // Only sharpness goes down if a phone can't keep up: fewer pixels to fill, same picture. Weak phones start one
+  // step down; if the run still stutters, the game steps down by itself and remembers it. Gameplay is identical.
+  const LEVELS = [
+    { dpr: 2,    fx: 1,   grain: true, glow: true },
+    { dpr: 1.5,  fx: 1,   grain: true, glow: true },
+    { dpr: 1.15, fx: 1,   grain: true, glow: true },
+    { dpr: 0.9,  fx: 0.8, grain: true, glow: true }   // last resort for the weakest phones — still every effect
+  ];
+  const weakDevice = (navigator.deviceMemory && navigator.deviceMemory <= 2) || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
+  let level = (() => { try { const v = +localStorage.getItem("fs_q"); if (v >= 0 && v < LEVELS.length) return v; } catch (e) {} return weakDevice ? 1 : 0; })();
+  const Q = () => LEVELS[level];
 
   // W×H — the window; FX/FW — the play field. The field is never wider than 9:16 portrait,
   // so a wide PC window, a tablet and a phone all get the same proportions (fair daily run).
-  let W = 0, H = 0, DPR = 1, R = 30, FX = 0, FW = 0, quality = 1;
-  let bgGrad = null, glowGrad = null, grainPat = null;
+  let W = 0, H = 0, DPR = 1, R = 30, FX = 0, FW = 0;
+  let bgCanvas = null;                 // background (gradient, glow, side bars) drawn once per size
+  const overlays = {};                 // sniper scope / slow-mo tint, drawn once per size, on demand
   function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, 2) * quality;
+    DPR = Math.min(window.devicePixelRatio || 1, Q().dpr);
     W = window.innerWidth; H = window.innerHeight;
     FW = Math.min(W, Math.round(H * 0.5625)); FX = Math.round((W - FW) / 2);
-    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    cv.width = Math.max(1, Math.round(W * DPR)); cv.height = Math.max(1, Math.round(H * DPR));
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.imageSmoothingEnabled = true;
     R = clamp(FW * 0.075, 22, 46);
-    // gradients and grain are built once per size, not every frame (cheap phones stay smooth)
-    bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-    bgGrad.addColorStop(0, "#0d0b09"); bgGrad.addColorStop(1, "#1a140d");
-    glowGrad = ctx.createRadialGradient(W / 2, H * 0.62, 0, W / 2, H * 0.62, Math.max(FW, H) * 0.7);
-    glowGrad.addColorStop(0, "rgba(214,176,112,0.10)"); glowGrad.addColorStop(1, "rgba(214,176,112,0)");
-    grainPat = ctx.createPattern(grain, "repeat");
+    buildBackground();
+    for (const k in overlays) delete overlays[k];
+    sprites.clear();
+    grainEl.classList.toggle("off", !Q().grain);
     const hud = document.getElementById("hud");
     hud.style.left = FX + "px"; hud.style.right = "auto"; hud.style.width = FW + "px";
     checkOrientation();
   }
   window.addEventListener("resize", resize);
+
+  function buildBackground() {
+    bgCanvas = bgCanvas || document.createElement("canvas");
+    bgCanvas.width = cv.width; bgCanvas.height = cv.height;
+    const g = bgCanvas.getContext("2d");
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const bg = g.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, "#0d0b09"); bg.addColorStop(1, "#1a140d");
+    g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    const glow = g.createRadialGradient(W / 2, H * 0.62, 0, W / 2, H * 0.62, Math.max(FW, H) * 0.7);
+    glow.addColorStop(0, "rgba(214,176,112,0.10)"); glow.addColorStop(1, "rgba(214,176,112,0)");
+    g.fillStyle = glow; g.fillRect(0, 0, W, H);
+    // wide window (PC, tablet): the field in the middle, darker side bars with a thin gold edge
+    if (FX > 0) {
+      g.fillStyle = "rgba(0,0,0,0.45)";
+      g.fillRect(0, 0, FX, H); g.fillRect(FX + FW, 0, W - FX - FW, H);
+      g.fillStyle = "rgba(214,176,112,0.22)";
+      g.fillRect(FX - 1, 0, 1, H); g.fillRect(FX + FW, 0, 1, H);
+    }
+  }
+
+  // full-screen soft overlays are pure gradients: render them small once and stretch (looks the same, costs a blit)
+  function overlay(kind) {
+    if (overlays[kind]) return overlays[kind];
+    const s = 4, c = document.createElement("canvas");
+    c.width = Math.max(1, Math.ceil(W / s)); c.height = Math.max(1, Math.ceil(H / s));
+    const g = c.getContext("2d"); g.scale(1 / s, 1 / s);
+    let v;
+    if (kind === "scope") {
+      const cx = FX + FW / 2, rr = Math.hypot(FW, H) * 0.5;
+      v = g.createRadialGradient(cx, H / 2, Math.min(FW, H) * 0.42, cx, H / 2, rr);
+      v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(0.55, "rgba(0,0,0,0.55)"); v.addColorStop(1, "rgba(0,0,0,0.9)");
+    } else {
+      v = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+      v.addColorStop(0, "rgba(120,190,255,0)"); v.addColorStop(1, "rgba(120,190,255,0.28)");
+    }
+    g.fillStyle = v; g.fillRect(0, 0, W, H);
+    return (overlays[kind] = c);
+  }
 
   // phone held sideways: the field would be tiny — ask to turn it back
   function checkOrientation() {
@@ -447,37 +518,182 @@
     paused = bad;   // the run waits while the phone is sideways
   }
 
-  // ---------- sound (WebAudio, synthesized — no files) ----------
-  let ac = null, muted = store.get("fs_mute", false);
-  function audio() { if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } if (ac && ac.state === "suspended") ac.resume(); return ac; }
-  function tone(freq, dur, type, vol, slideTo) {
-    if (muted || !audio()) return;
-    const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
-    o.type = type; o.frequency.setValueAtTime(freq, t);
-    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
-    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+  // ---------- sound ----------
+  // Every effect is synthesized ONCE, right after load, into a short ready-made recording (OfflineAudioContext).
+  // During the run a sound is only "start this recording": no oscillators, no random noise fills, no timers —
+  // it costs next to nothing and starts on the very tap, even on a cheap phone.
+  const VOLUME = 0.4;                 // overall loudness — deliberately soft
+  const MAX_VOICES = 14;              // more at once is just noise — extra sounds are skipped
+  const GAP = { pop: 0.016, pop2: 0.016, pop3: 0.016, miss: 0.07, head: 0.03, shot: 0.03, bonus: 0.09, lose: 0.05 };
+  let ac = null, master = null, muted = store.get("fs_mute", false), voices = 0;
+  const SND = {}, lastAt = {};
+
+  // must be called from a tap (browsers only allow sound after the user touched the page)
+  function audio() {
+    if (!ac) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      try { ac = new AC({ latencyHint: "interactive" }); } catch (e) { try { ac = new AC(); } catch (e2) { ac = null; } }
+      if (!ac) return null;
+      master = ac.createGain();
+      master.gain.value = muted ? 0 : VOLUME;
+      try {
+        // a soft limiter: a dozen pops at once never clip or get loud
+        const comp = ac.createDynamicsCompressor();
+        comp.threshold.value = -16; comp.knee.value = 8; comp.ratio.value = 8; comp.attack.value = 0.002; comp.release.value = 0.1;
+        master.connect(comp); comp.connect(ac.destination);
+      } catch (e) { master.connect(ac.destination); }
+      try { const s = ac.createBufferSource(); s.buffer = ac.createBuffer(1, 1, 22050); s.connect(ac.destination); s.start(0); } catch (e) {}   // iOS unlock
+    }
+    if (ac.state !== "running" && ac.state !== "closed") wake(true);
+    return ac;
   }
-  function noise(dur, vol, freq) {
-    if (muted || !audio()) return;
-    const t = ac.currentTime, n = Math.floor(ac.sampleRate * dur), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
-    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
-    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
-    s.buffer = buf; f.type = "bandpass"; f.frequency.value = freq; f.Q.value = 0.9; g.gain.value = vol;
-    s.connect(f).connect(g).connect(ac.destination); s.start(t);
+  // resume/suspend return promises that some phones reject — swallow it, the next tap simply tries again
+  function wake(on) {
+    try { const p = on ? ac.resume() : ac.suspend(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
   }
+
+  function play(name, rate, vol, pan, delay) {
+    // while audio is asleep nothing is queued — otherwise the sounds would burst out late, all at once
+    if (muted || !ac || ac.state !== "running") return;
+    const buf = SND[name];
+    if (!buf || voices >= MAX_VOICES) return;
+    const now = ac.currentTime;
+    if (!delay && GAP[name] && now - (lastAt[name] || -9) < GAP[name]) return;
+    lastAt[name] = now;
+    try {
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      if (rate && rate !== 1) src.playbackRate.value = rate;
+      let node = src;
+      if (vol !== undefined && vol !== 1) { const g = ac.createGain(); g.gain.value = vol; node.connect(g); node = g; }
+      if (pan && ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = clamp(pan, -1, 1); node.connect(p); node = p; }
+      node.connect(master);
+      voices++;
+      src.onended = () => { voices = Math.max(0, voices - 1); try { src.disconnect(); } catch (e) {} };
+      src.start(now + (delay || 0));
+    } catch (e) {}
+  }
+  function setMuted(m) {
+    muted = m;
+    if (master && ac) { try { master.gain.setValueAtTime(m ? 0 : VOLUME, ac.currentTime); } catch (e) { master.gain.value = m ? 0 : VOLUME; } }
+  }
+
+  // --- the recipes (all synthesized, no files to download) ---
+  const SR = 44100;
+  const NOTE = (n) => 440 * Math.pow(2, (n - 69) / 12);
+  function kit(o) {
+    let white = null;
+    const noiseBuf = () => {
+      if (white) return white;
+      white = o.createBuffer(1, SR, SR);
+      const d = white.getChannelData(0);
+      let s = 22222;
+      for (let i = 0; i < d.length; i++) { s = (s * 16807) % 2147483647; d[i] = s / 1073741823.5 - 1; }
+      return white;
+    };
+    // quick rise to `peak`, smooth fall to silence by t0 + len
+    const env = (t0, a, peak, len) => {
+      const g = o.createGain();
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(peak, t0 + a);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + len); g.connect(o.destination); return g;
+    };
+    const filt = (type, f0, f1, t0, len, q) => {
+      const f = o.createBiquadFilter(); f.type = type; f.frequency.setValueAtTime(f0, t0);
+      if (f1) f.frequency.exponentialRampToValueAtTime(f1, t0 + len);
+      if (q) f.Q.value = q; return f;
+    };
+    const tone = (type, f0, f1, t0, len, peak, a = 0.004, lp) => {
+      const os = o.createOscillator(); os.type = type; os.frequency.setValueAtTime(f0, t0);
+      if (f1) os.frequency.exponentialRampToValueAtTime(f1, t0 + len);
+      const g = env(t0, a, peak, len);
+      if (lp) { const f = filt("lowpass", lp, 0, t0, len); os.connect(f); f.connect(g); } else os.connect(g);
+      os.start(t0); os.stop(t0 + len + 0.02);
+    };
+    const noise = (t0, len, peak, type, f0, f1, q = 0.8, a = 0.001, from = 0) => {
+      const s = o.createBufferSource(); s.buffer = noiseBuf();
+      const f = filt(type, f0, f1, t0, len, q), g = env(t0, a, peak, len);
+      s.connect(f); f.connect(g); s.start(t0, from); s.stop(t0 + len + 0.02);
+    };
+    const arp = (notes, step, type, len, peak, t0 = 0) => notes.forEach((n, i) => {
+      tone(type, NOTE(n), 0, t0 + i * step, len, peak);
+      tone("sine", NOTE(n) * 2, 0, t0 + i * step, len * 0.6, peak * 0.25);
+    });
+    return { tone, noise, arp };
+  }
+  const RECIPES = {
+    // three slightly different balloon pops — a sharp rubber crack + a short low «thump»
+    pop:  [0.16, ({ tone, noise }) => { noise(0, 0.06, 0.9, "highpass", 1200, 650, 0.7, 0.001, 0.1); noise(0, 0.022, 0.5, "bandpass", 3400, 0, 1.3, 0.001, 0.3); tone("sine", 200, 58, 0, 0.085, 0.5, 0.002); }],
+    pop2: [0.16, ({ tone, noise }) => { noise(0, 0.07, 0.85, "highpass", 900, 500, 0.7, 0.001, 0.5); noise(0, 0.02, 0.45, "bandpass", 2800, 0, 1.3, 0.001, 0.7); tone("sine", 170, 52, 0, 0.09, 0.55, 0.002); }],
+    pop3: [0.16, ({ tone, noise }) => { noise(0, 0.055, 0.9, "highpass", 1500, 800, 0.7, 0.001, 0.2); noise(0, 0.02, 0.5, "bandpass", 4200, 0, 1.3, 0.001, 0.8); tone("sine", 230, 70, 0, 0.075, 0.45, 0.002); }],
+    // headshot: a short bright metallic «tink» on top of the pop
+    head: [0.32, ({ tone, noise }) => { noise(0, 0.012, 0.3, "highpass", 4500); tone("sine", 2093, 0, 0.003, 0.26, 0.2); tone("sine", 3150, 0, 0.003, 0.17, 0.11); tone("sine", 5270, 0, 0.003, 0.08, 0.05); }],
+    // gold: a coin «cha-ching»
+    gold: [0.5, ({ tone }) => { tone("square", NOTE(83), 0, 0, 0.08, 0.09, 0.003, 3200); tone("square", NOTE(88), 0, 0.07, 0.38, 0.1, 0.003, 3200); tone("sine", NOTE(100), 0, 0.09, 0.28, 0.05); }],
+    // cursed: a dark low growl
+    cursed: [0.6, ({ tone, noise }) => { tone("sawtooth", 120, 38, 0, 0.5, 0.42, 0.004, 700); tone("square", 62, 40, 0, 0.35, 0.16, 0.004, 300); noise(0, 0.3, 0.45, "lowpass", 900, 200, 0.7); }],
+    // ice: falling glass chimes
+    ice: [0.8, ({ tone, noise }) => { [96, 91, 88, 84].forEach((n, i) => { tone("sine", NOTE(n), 0, i * 0.05, 0.45, 0.12); tone("sine", NOTE(n) * 2.76, 0, i * 0.05, 0.2, 0.035); }); noise(0, 0.5, 0.1, "highpass", 7000, 0, 0.5, 0.05); }],
+    // spirit: a rising whoosh and a soft bright chord
+    spirit: [1.2, ({ tone, noise }) => { noise(0, 0.7, 0.4, "bandpass", 350, 3200, 1.8, 0.25); [72, 76, 79, 83].forEach((n, i) => tone("sine", NOTE(n) * (1 + i * 0.002), 0, 0.12 + i * 0.04, 1.0, 0.08, 0.05)); }],
+    // tapped the air: a quiet whiff
+    miss: [0.14, ({ noise }) => noise(0, 0.1, 0.2, "bandpass", 1600, 700, 0.8, 0.01)],
+    // sniper shot: a muffled «thup»
+    shot: [0.26, ({ tone, noise }) => { noise(0, 0.12, 0.75, "lowpass", 2400, 300, 0.7); tone("sine", 130, 45, 0, 0.16, 0.45, 0.002); noise(0.01, 0.2, 0.07, "bandpass", 900, 0, 2, 0.02); }],
+    // a balloon got away
+    lose: [0.4, ({ tone }) => { tone("triangle", 330, 130, 0, 0.32, 0.3, 0.004); tone("sine", 95, 60, 0, 0.2, 0.28, 0.003); }],
+    // let a cursed one fly away — patience bonus
+    bonus: [0.3, ({ tone }) => { tone("sine", NOTE(88), 0, 0, 0.22, 0.09); tone("sine", NOTE(95), 0, 0.05, 0.2, 0.055); }],
+    combo2: [0.4, ({ arp }) => arp([81, 85, 88], 0.055, "triangle", 0.2, 0.11)],
+    combo3: [0.45, ({ arp }) => arp([84, 88, 91], 0.055, "triangle", 0.22, 0.12)],
+    combo4: [0.6, ({ arp, tone }) => { arp([88, 92, 95, 100], 0.05, "triangle", 0.26, 0.12); tone("sine", NOTE(105), 0, 0.2, 0.3, 0.04); }],
+    life: [0.6, ({ arp }) => arp([76, 83, 88], 0.08, "triangle", 0.24, 0.13)],
+    tick: [0.13, ({ tone }) => tone("sine", NOTE(76), 0, 0, 0.11, 0.16)],
+    go: [0.45, ({ tone }) => { [84, 88, 91].forEach((n) => tone("sine", NOTE(n), 0, 0, 0.38, 0.09)); }],
+    over: [1.3, ({ tone }) => { [79, 75, 72, 67].forEach((n, i) => tone("triangle", NOTE(n), 0, i * 0.16, 0.34, 0.15, 0.004, 2200)); }],
+    record: [1.0, ({ arp, tone }) => { arp([79, 84, 88, 91, 96], 0.07, "triangle", 0.3, 0.11); tone("sine", NOTE(100), 0, 0.35, 0.4, 0.04); }]
+  };
+  function bake(dur, build) {
+    return new Promise((resolve) => {
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!OAC) return resolve(null);
+      let o, done = false;
+      const fin = (b) => { if (!done) { done = true; resolve(b || null); } };
+      try { o = new OAC(1, Math.ceil(SR * dur), SR); build(kit(o)); } catch (e) { return fin(null); }
+      o.oncomplete = (e) => fin(e.renderedBuffer);
+      try { const p = o.startRendering(); if (p && p.then) p.then(fin, () => fin(null)); } catch (e) { fin(null); }
+      setTimeout(() => fin(null), 4000);   // never wait forever on an odd browser
+    });
+  }
+  // one sound after another, in the background — the menu is never held up
+  async function bakeAll() {
+    for (const [name, [dur, build]] of Object.entries(RECIPES)) {
+      const b = await bake(dur, build);
+      if (b) SND[name] = b;
+    }
+  }
+
+  const POPS = ["pop", "pop2", "pop3"];
+  const panOf = (x) => x === undefined || !FW ? 0 : (x / FW * 2 - 1) * 0.35;
   const sfx = {
-    pop(pitch) { noise(0.09, 0.55, 1400 * pitch); tone(520 * pitch, 0.07, "triangle", 0.12, 260 * pitch); },
-    head() { tone(1900, 0.09, "square", 0.05); tone(2600, 0.06, "sine", 0.06); },
-    combo(n) { [0, 4, 7].forEach((st, i) => setTimeout(() => tone(440 * Math.pow(2, (st + n) / 12), 0.12, "sine", 0.08), i * 55)); },
-    cursed() { tone(110, 0.35, "sawtooth", 0.18, 45); noise(0.25, 0.4, 300); },
-    ice() { [0, 5, 9, 12].forEach((st, i) => setTimeout(() => tone(1200 * Math.pow(2, st / 12), 0.25, "sine", 0.05), i * 40)); },
-    spirit() { tone(330, 0.6, "sine", 0.12, 990); noise(0.4, 0.3, 2400); },
-    miss() { tone(180, 0.08, "triangle", 0.06, 120); },
-    life() { [0, 7, 12].forEach((st, i) => setTimeout(() => tone(660 * Math.pow(2, st / 12), 0.14, "triangle", 0.08), i * 70)); },
-    lose() { tone(300, 0.25, "triangle", 0.12, 150); },
-    over() { [0, -3, -7, -12].forEach((st, i) => setTimeout(() => tone(392 * Math.pow(2, st / 12), 0.3, "triangle", 0.1), i * 160)); },
-    count(hi) { tone(hi ? 880 : 520, 0.12, "sine", 0.1); }
+    pop(x, type) {
+      const rate = (type === "small" ? 1.32 : type === "gold" ? 1.12 : type === "bunch" ? 0.88 : 1) * (0.94 + Math.random() * 0.12);
+      play(POPS[(Math.random() * 3) | 0], rate, 1, panOf(x));
+    },
+    chain(n) { for (let i = 0; i < Math.min(n, 5); i++) play(POPS[i % 3], 1 + i * 0.07, 0.55, i % 2 ? 0.3 : -0.3, 0.07 + i * 0.045); },
+    head(x) { play("head", 0.97 + Math.random() * 0.06, 1, panOf(x)); },
+    gold(x) { play("gold", 1, 1, panOf(x)); },
+    combo(lvl) { play("combo" + clamp(lvl, 2, 4)); },
+    cursed() { play("cursed"); },
+    ice() { play("ice"); },
+    spirit() { play("spirit"); },
+    miss() { play("miss", 0.95 + Math.random() * 0.1); },
+    shot(x) { play("shot", 0.96 + Math.random() * 0.08, 1, panOf(x)); },
+    life() { play("life"); },
+    lose(x) { play("lose", 1, 1, panOf(x)); },
+    bonus(x) { play("bonus", 1, 0.8, panOf(x)); },
+    over(rec) { play(rec ? "record" : "over"); },
+    count(go) { play(go ? "go" : "tick"); }
   };
 
   // ---------- balloon types ----------
@@ -517,7 +733,44 @@
     g.restore();
   }
 
-  function body(g, x, y, r, T, type, t) {
+  // ---------- balloon sprites ----------
+  // A balloon is drawn with gradients once per type and size into a small picture; every frame just copies it.
+  // (Building radial gradients for every balloon every frame was the main cost on weak phones.)
+  const sprites = new Map();
+  function sprite(type, r) {
+    const key = type + "|" + Math.round(r * 4);
+    let s = sprites.get(key);
+    if (s) return s;
+    const ox = r * 1.18 + 2, oy = r * 1.22 + 2, w = ox * 2, h = r * 2.5 + 4;
+    const c = document.createElement("canvas");
+    c.width = Math.ceil(w * DPR); c.height = Math.ceil(h * DPR);
+    const g = c.getContext("2d");
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (type === "bunch") {
+      for (const [bx, by] of [[-0.55, 0.1], [0.55, 0.1], [0, -0.45]]) body(g, ox + bx * r, oy + by * r, r * 0.6, TYPES.red, "red", 0, true);
+    } else body(g, ox, oy, r, TYPES[type], type, 0, true);
+    s = { c, ox, oy, w: c.width / DPR, h: c.height / DPR };
+    sprites.set(key, s);
+    return s;
+  }
+  const GLOW = { gold: "rgba(255,210,110,", spirit: "rgba(255,255,255,", cursed: "rgba(220,30,30,", ice: "rgba(140,210,255," };
+  function glowSprite(type, r) {
+    const key = "glow|" + type + "|" + Math.round(r * 4);
+    let s = sprites.get(key);
+    if (s) return s;
+    const o = r * 2.1 + 2, c = document.createElement("canvas");
+    c.width = c.height = Math.ceil(o * 2 * DPR);
+    const g = c.getContext("2d");
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const rg = g.createRadialGradient(o, o, r * 0.6, o, o, r * 2.1);
+    rg.addColorStop(0, GLOW[type] + "0.35)"); rg.addColorStop(1, GLOW[type] + "0)");
+    g.fillStyle = rg; g.beginPath(); g.arc(o, o, r * 2.1, 0, Math.PI * 2); g.fill();
+    s = { c, ox: o, oy: o, w: c.width / DPR, h: c.height / DPR };
+    sprites.set(key, s);
+    return s;
+  }
+
+  function body(g, x, y, r, T, type, t, still) {
     const grd = g.createRadialGradient(x - r * 0.35, y - r * 0.45, r * 0.1, x, y, r * 1.25);
     grd.addColorStop(0, T.col[0]); grd.addColorStop(1, T.col[1]);
     g.fillStyle = grd;
@@ -540,7 +793,7 @@
         const a = i * Math.PI / 3;
         g.beginPath(); g.moveTo(x + Math.cos(a) * r * 0.42, y + Math.sin(a) * r * 0.42); g.lineTo(x - Math.cos(a) * r * 0.42, y - Math.sin(a) * r * 0.42); g.stroke();
       }
-    } else if (type === "gold") {
+    } else if (type === "gold" && !still) {   // the twinkle is animated — drawn live on top of the sprite
       const s = r * (0.28 + 0.08 * Math.sin(t * 9));
       g.fillStyle = "rgba(255,255,255,.95)";
       g.beginPath(); g.moveTo(x + r * 0.35, y - r * 0.55 - s); g.lineTo(x + r * 0.35 + s * 0.22, y - r * 0.55); g.lineTo(x + r * 0.35, y - r * 0.55 + s);
@@ -587,7 +840,10 @@
       flash: 0, flashCol: "255,255,255", nextLifeAt: 2500, over: false, sent: false,
       ammo: SNIPER_AMMO, timeLeft: SNIPER_TIME, hstreak: 0, maxH: 0, endAt: 0, endReason: ""
     };
-    particles.length = popups.length = marks.length = 0;
+    while (particles.length) pool.push(particles.pop());
+    popups.length = marks.length = 0;
+    hudDirty = false;
+    for (const k in hudCache) delete hudCache[k];   // a new run — write every HUD field afresh
     const sniper = mode === "sniper";
     $("modeLbl").textContent = sniper ? "снайпер" : "забег дня";
     $("goal").innerHTML = "";
@@ -599,7 +855,7 @@
     countdown = 3.2; running = true; last = performance.now();
     // a swipe or the close button in the middle of a run asks first
     try { if (tgAtLeast("6.2")) tg.enableClosingConfirmation(); } catch (e) {}
-    sfx.count(false);
+    // the «3, 2, 1» ticks come from the frame loop, in step with the digits on screen
   }
 
   function pickType(at, p, r, sniper) {
@@ -656,18 +912,34 @@
     const m = sniper ? (head ? mult() : 1) : mult();
     const gain = Math.round(pts * m * (head ? (sniper ? 4 : 2) : 1));
     S.score += gain;
-    popups.push({ x, y: y - 10, text: "+" + gain, col: head ? "#f0d294" : "#ece2cd", size: head ? 26 : 20, life: 0.9 });
+    popup(x, y - 10, "+" + gain, head ? "#f0d294" : "#ece2cd", head ? 26 : 20, 0.9);
     if (!sniper && S.score >= S.nextLifeAt) {
       S.nextLifeAt += 2500;
-      if (S.lives < 5) { S.lives++; sfx.life(); haptic("success"); popups.push({ x: FW / 2, y: H * 0.4, text: "+1 жизнь", col: "#ff6d5f", size: 30, life: 1.4 }); }
+      if (S.lives < 5) { S.lives++; sfx.life(); haptic("success"); popup(FW / 2, H * 0.4, "+1 жизнь", "#ff6d5f", 30, 1.4, true); }
     }
   }
 
+  // popups: at most 16 on screen (a «spirit» chain makes a dozen) — the oldest small one gives way
+  function popup(x, y, text, col, size, life, important) {
+    if (popups.length >= 16) {
+      const i = popups.findIndex((p) => !p.imp);
+      if (i < 0 && !important) return;
+      popups.splice(i < 0 ? 0 : i, 1);
+    }
+    popups.push({ x, y, text, col, size, life, imp: !!important });
+  }
+
+  // shards are recycled instead of created and thrown away — no garbage-collector hiccups mid-run
+  const pool = [];
+  const MAX_PARTICLES = 260;
   function burst(x, y, cols, n, power) {
+    n = Math.min(Math.round(n * Q().fx), MAX_PARTICLES - particles.length);
     for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2, v = (0.35 + Math.random()) * power;
-      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - power * 0.2, life: 0.6 + Math.random() * 0.5,
-        max: 1, size: 2 + Math.random() * 4, col: cols[(Math.random() * cols.length) | 0], rot: Math.random() * 6, vr: (Math.random() - 0.5) * 12, shard: Math.random() < 0.6 });
+      const a = Math.random() * Math.PI * 2, v = (0.35 + Math.random()) * power, p = pool.pop() || {};
+      p.x = x; p.y = y; p.vx = Math.cos(a) * v; p.vy = Math.sin(a) * v - power * 0.2; p.life = 0.6 + Math.random() * 0.5;
+      p.size = 2 + Math.random() * 4; p.col = cols[(Math.random() * cols.length) | 0]; p.rot = Math.random() * 6;
+      p.vr = (Math.random() - 0.5) * 12; p.shard = Math.random() < 0.6;
+      particles.push(p);
     }
   }
 
@@ -681,51 +953,54 @@
       sfx.cursed(); haptic("error");
       if (sniper) {
         S.score = Math.max(0, S.score - 50); S.timeLeft -= 3;
-        popups.push({ x: b.x, y: b.y, text: "проклятый −50 · −3 сек", col: "#ff4d45", size: 20, life: 1.2 });
+        popup(b.x, b.y, "проклятый −50 · −3 сек", "#ff4d45", 20, 1.2, true);
         updateHud();
         return;
       }
       S.lives--;
-      popups.push({ x: b.x, y: b.y, text: "проклятый −1 жизнь", col: "#ff4d45", size: 20, life: 1.2 });
+      popup(b.x, b.y, "проклятый −1 жизнь", "#ff4d45", 20, 1.2, true);
+      updateHud();
       if (S.lives <= 0) endGame();
       return;
     }
     S.pops++; S.hits++;
     if (!chain) {
       S.combo++; S.maxCombo = Math.max(S.maxCombo, S.combo);
-      if (!sniper && [5, 10, 20].includes(S.combo)) { sfx.combo(S.combo === 5 ? 0 : S.combo === 10 ? 3 : 7); popups.push({ x: FW / 2, y: H * 0.3, text: "×" + mult(), col: "#f0d294", size: 44, life: 1.0 }); }
+      if (!sniper && [5, 10, 20].includes(S.combo)) { sfx.combo(mult()); popup(FW / 2, H * 0.3, "×" + mult(), "#f0d294", 44, 1.0, true); }
     }
     if (head) {
       S.heads++;
       if (sniper) {
         S.hstreak++; S.maxH = Math.max(S.maxH, S.hstreak);
-        if (S.ammo < SNIPER_AMMO_MAX) { S.ammo++; popups.push({ x: b.x, y: b.y + b.r * 1.6, text: "+1 патрон", col: "#ece2cd", size: 15, life: 0.8 }); }
-        if ([3, 5, 8].includes(S.hstreak)) { sfx.combo(S.hstreak === 3 ? 0 : S.hstreak === 5 ? 3 : 7); popups.push({ x: FW / 2, y: H * 0.3, text: "серия ×" + mult(), col: "#f0d294", size: 40, life: 1.0 }); }
+        if (S.ammo < SNIPER_AMMO_MAX) { S.ammo++; popup(b.x, b.y + b.r * 1.6, "+1 патрон", "#ece2cd", 15, 0.8); }
+        if ([3, 5, 8].includes(S.hstreak)) { sfx.combo(S.hstreak === 3 ? 2 : S.hstreak === 5 ? 3 : 4); popup(FW / 2, H * 0.3, "серия ×" + mult(), "#f0d294", 40, 1.0, true); }
       }
-      popups.push({ x: b.x, y: b.y - b.r * 1.5, text: "в голову", col: "#f0d294", size: 18, life: 0.9 });
-      sfx.head(); haptic("medium");
+      popup(b.x, b.y - b.r * 1.5, "в голову", "#f0d294", 18, 0.9);
+      if (!chain) { sfx.head(b.x); haptic("medium"); }
     } else {
       if (sniper) S.hstreak = 0;
-      haptic("light");
+      if (!chain) haptic("light");
     }
     addScore(T.pts, b.x, b.y, head);
     burst(b.x, b.y, [T.col[0], T.col[1], "#d6b070"], b.type === "gold" ? 30 : 18, b.type === "gold" ? 320 : 230);
-    sfx.pop(b.type === "small" ? 1.4 : b.type === "gold" ? 1.25 : 1);
+    if (!chain) { sfx.pop(b.x, b.type); if (b.type === "gold") sfx.gold(b.x); }
 
     if (b.type === "ice") {
       S.slowUntil = S.real + 4; sfx.ice();
-      popups.push({ x: FW / 2, y: H * 0.45, text: "замедление", col: "#bfe6ff", size: 30, life: 1.2 });
+      popup(FW / 2, H * 0.45, "замедление", "#bfe6ff", 30, 1.2, true);
     } else if (b.type === "spirit") {
       S.flash = 0.7; S.flashCol = "255,250,235"; sfx.spirit(); haptic("heavy");
-      popups.push({ x: FW / 2, y: H * 0.45, text: "дух освобождён", col: "#ffffff", size: 30, life: 1.3 });
-      for (const o of S.balloons.slice()) if (o.type !== "cursed") popBalloon(o, false, true);
+      popup(FW / 2, H * 0.45, "дух освобождён", "#ffffff", 30, 1.3, true);
+      let n = 0;
+      for (const o of S.balloons.slice()) if (o.type !== "cursed") { popBalloon(o, false, true); n++; }
+      sfx.chain(n);   // a quick «pop-pop-pop» instead of a dozen pops at the same instant
     } else if (b.type === "bunch") {
       for (let i = -1; i <= 1; i++) {
         const r = R * TYPES.small.size;
         S.balloons.push({ type: "small", x: b.x + i * r * 1.3, y: b.y, r, vy: b.vy * 1.25, vx: i * 70, ph: Math.random() * 6, sway: 10, born: S.t });
       }
     }
-    updateHud();
+    hudDirty = true;   // the score line is redrawn once per frame, not once per balloon
   }
 
   // a finger covers more than a mouse pointer: touch gets a slightly bigger hit zone and "head" zone,
@@ -744,31 +1019,38 @@
       S.ammo--;
       // last bullet: give the shot a moment to land, then end
       if (S.ammo === 0) S.endAt = S.real + 0.7;
+      sfx.shot(x);
     }
     S.shots++;
-    marks.push({ x, y, life: 0.35 });
+    if (marks.length < 12) marks.push({ x, y, life: 0.35 });
     // topmost balloon under the finger, a little forgiving
     for (let i = S.balloons.length - 1; i >= 0; i--) {
       const b = S.balloons[i];
       const dx = (x - b.x) / 0.92, dy = (y - b.y) / 1.12, d = Math.hypot(dx, dy);
       if (d <= b.r * zone.hit) { popBalloon(b, d <= b.r * zone.head && b.type !== "cursed", false); return; }
     }
-    if (S.combo > 0 || S.mode === "sniper") popups.push({ x, y, text: "мимо", col: "#8a7d68", size: 16, life: 0.6 });
-    S.combo = 0; S.hstreak = 0; sfx.miss(); updateHud();
+    if (S.combo > 0 || S.mode === "sniper") popup(x, y, "мимо", "#8a7d68", 16, 0.6);
+    S.combo = 0; S.hstreak = 0;
+    if (S.mode !== "sniper") sfx.miss();
+    hudDirty = true;
   }
-  cv.addEventListener("pointerdown", onTap);
+  cv.addEventListener("pointerdown", (ev) => {
+    if (ac && ac.state !== "running" && !muted) audio();   // phone woke the app up — wake the sound with the first tap
+    onTap(ev);
+  });
   // right click / long press would open the browser menu in the middle of a run
   cv.addEventListener("contextmenu", (e) => e.preventDefault());
 
   function endGame() {
     if (S.over) return;
     S.over = true; running = false; S.shake = 0;
+    updateHud();
     try { if (tgAtLeast("6.2")) tg.disableClosingConfirmation(); } catch (e) {}
-    sfx.over(); haptic("error");
     const sniper = S.mode === "sniper";
     const bestKey = sniper ? "fs_best_sniper" : "fs_best", dayKey = "fs_daily_" + S.day;
     const best = store.get(bestKey, 0), dayBest = store.get(dayKey, 0);
     const rec = S.score > best;
+    sfx.over(rec && S.score > 0); haptic("error");
     if (rec) store.set(bestKey, S.score);
     if (S.mode === "daily" && S.score > dayBest) store.set(dayKey, S.score);
     const acc = S.shots ? S.hits / S.shots : 0;
@@ -804,11 +1086,16 @@
   };
 
   // ---------- loop ----------
+  let hudDirty = false, lastIdle = 0;
   function frame(now) {
+    requestAnimationFrame(frame);
     // physics step is capped so a slow phone never tunnels balloons; clocks use real time (see update)
-    const real = Math.min(0.5, (now - last) / 1000 || 0); last = now;
+    const real = Math.min(0.5, (now - last) / 1000 || 0);
+    // behind a menu nothing moves but the dust — 30 fps there is plenty and saves the battery
+    if (!running && curScreen && now - lastIdle < 32) return;
+    lastIdle = now; last = now;
     const dt = Math.min(0.1, real);
-    autoQuality(real);
+    const t0 = performance.now();
     if (running && S && !paused) {
       if (countdown > 0) {
         const before = Math.ceil(countdown); countdown -= real; const after = Math.ceil(countdown);
@@ -818,15 +1105,26 @@
     }
     updateFx(dt);
     render(now / 1000);
-    requestAnimationFrame(frame);
+    if (hudDirty) { hudDirty = false; updateHud(); }
+    autoQuality(real, performance.now() - t0);
   }
 
-  // cheap phone can't keep up (under ~40 fps for 2 s while playing) → draw at lower resolution, once
-  let slowFrames = 0, qualityChecked = false;
-  function autoQuality(real) {
-    if (qualityChecked || !running || countdown > 0 || document.hidden) return;
-    slowFrames = real > 0.025 ? slowFrames + 1 : Math.max(0, slowFrames - 2);
-    if (slowFrames > 80 && DPR > 1.2) { quality = 0.65; qualityChecked = true; resize(); }
+  // A phone that can't keep up steps down one sharpness level (see LEVELS) — effects stay.
+  // Judged over ~1.5 s of real play: many long frames (jank), or our own drawing taking too long.
+  // A phone steadily locked at 30 fps (battery saver) is smooth, so it is NOT stepped down.
+  let qFrames = 0, qLong = 0, qWork = 0, qCool = 0;
+  function autoQuality(real, work) {
+    if (!running || countdown > 0 || paused || document.hidden || level >= LEVELS.length - 1) { qFrames = qLong = qWork = 0; return; }
+    if (qCool > 0) { qCool -= real; return; }
+    qFrames++; qWork += work; if (real > 0.04) qLong++;
+    if (qFrames < 90) return;
+    const bad = qLong / qFrames > 0.12 || qWork / qFrames > 11;
+    qFrames = qLong = qWork = 0;
+    if (!bad) return;
+    level++;
+    try { localStorage.setItem("fs_q", String(level)); } catch (e) {}
+    qCool = 1.5;
+    resize();
   }
 
   function update(dt, realDt) {
@@ -839,7 +1137,7 @@
       S.timeLeft -= realDt;
       if (S.timeLeft <= 0) { S.timeLeft = 0; S.endReason = "время вышло"; updateHud(); endGame(); return; }
       if (S.endAt && S.real >= S.endAt) { S.endReason = "патроны кончились"; updateHud(); endGame(); return; }
-      if (Math.ceil(S.timeLeft) !== Math.ceil(S.timeLeft + realDt)) updateHud();
+      if (Math.ceil(S.timeLeft) !== Math.ceil(S.timeLeft + realDt)) hudDirty = true;
     }
     while (S.next.at <= S.t) { spawn(S.next); S.next = S.plan.next().value; }
     for (let i = S.balloons.length - 1; i >= 0; i--) {
@@ -852,22 +1150,24 @@
         S.balloons.splice(i, 1);
         if (b.type === "cursed") {
           S.score += 5 * mult();
-          popups.push({ x: b.x, y: 70, text: "выдержка +" + 5 * mult(), col: "#d6b070", size: 16, life: 1.0 });
+          popup(b.x, 70, "выдержка +" + 5 * mult(), "#d6b070", 16, 1.0);
+          sfx.bonus(b.x);
         } else if (TYPES[b.type].lose && S.mode !== "sniper") {
           S.lives--; S.combo = 0; S.flash = 0.35; S.flashCol = "200,40,30";
-          popups.push({ x: b.x, y: 80, text: "упустил", col: "#ff4d45", size: 18, life: 1.0 });
-          sfx.lose(); haptic("warning");
+          popup(b.x, 80, "упустил", "#ff4d45", 18, 1.0, true);
+          sfx.lose(b.x); haptic("warning");
           if (S.lives <= 0) { updateHud(); endGame(); return; }
         }
-        updateHud();
+        hudDirty = true;
       }
     }
   }
 
   function updateFx(dt) {
+    // finished shards go back to the pool (swap with the last one — no array shifting)
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i]; p.life -= dt;
-      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      if (p.life <= 0) { particles[i] = particles[particles.length - 1]; particles.pop(); pool.push(p); continue; }
       p.vy += 520 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.985; p.rot += p.vr * dt;
     }
     for (let i = popups.length - 1; i >= 0; i--) { const p = popups[i]; p.life -= dt; p.y -= 42 * dt; if (p.life <= 0) popups.splice(i, 1); }
@@ -878,32 +1178,72 @@
   }
 
   function render(t) {
-    // background (gradients are prepared in resize)
-    ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = glowGrad; ctx.fillRect(0, 0, W, H);
-    for (const d of dust) { ctx.fillStyle = `rgba(214,176,112,${d.a})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.s, 0, Math.PI * 2); ctx.fill(); }
-
-    // wide window (PC, tablet): the field in the middle, darker side bars with a thin gold edge
-    if (FX > 0) {
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(0, 0, FX, H); ctx.fillRect(FX + FW, 0, W - FX - FW, H);
-      ctx.fillStyle = "rgba(214,176,112,0.22)";
-      ctx.fillRect(FX - 1, 0, 1, H); ctx.fillRect(FX + FW, 0, 1, H);
-    }
-
-    ctx.save();
-    ctx.translate(FX, 0);   // everything in the game lives in field coordinates
-    if (S && S.shake > 0) ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
-
-    if (S) for (const b of S.balloons) drawBalloon(ctx, b.x, b.y, b.r, b.type, t);
-
-    // particles
-    for (const p of particles) {
-      ctx.globalAlpha = clamp(p.life / 0.6, 0, 1); ctx.fillStyle = p.col;
-      if (p.shard) { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillRect(-p.size, -p.size * 0.4, p.size * 2, p.size * 0.8); ctx.restore(); }
-      else { ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2); ctx.fill(); }
-    }
+    // background: one copy of the picture prepared in resize (gradient, glow, side bars)
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
+    ctx.drawImage(bgCanvas, 0, 0);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    // dust: same specks as before, a tiny square instead of a circle (identical at this size, much cheaper)
+    ctx.fillStyle = "#d6b070";
+    for (const d of dust) { ctx.globalAlpha = d.a; const s = d.s * 1.7; ctx.fillRect(d.x - s / 2, d.y - s / 2, s, s); }
+    ctx.globalAlpha = 1;
+
+    // everything in the game lives in field coordinates
+    let sx = FX, sy = 0;
+    if (S && S.shake > 0) { sx += (Math.random() - 0.5) * S.shake; sy += (Math.random() - 0.5) * S.shake; }
+    ctx.setTransform(DPR, 0, 0, DPR, sx * DPR, sy * DPR);
+
+    if (S && S.balloons.length) {
+      const bs = S.balloons;
+      // strings: all of them in two strokes (normal and cursed) instead of one per balloon
+      ctx.lineWidth = 1.3;
+      for (const cursedPass of [false, true]) {
+        ctx.strokeStyle = cursedPass ? "rgba(160,60,60,.6)" : "rgba(225,215,195,.55)";
+        ctx.beginPath();
+        for (const b of bs) {
+          if ((b.type === "cursed") !== cursedPass) continue;
+          const r = b.r, sw = Math.sin(t * 3 + b.x * 0.05) * r * 0.25;
+          ctx.moveTo(b.x, b.y + r * 1.18);
+          ctx.bezierCurveTo(b.x + sw, b.y + r * 1.7, b.x - sw, b.y + r * 2.2, b.x + sw * 0.6, b.y + r * 2.8);
+        }
+        ctx.stroke();
+      }
+      // glows (gold, ice, spirit, cursed) — pulsing exactly as before, from a pre-drawn picture
+      for (const b of bs) {
+        if (!GLOW[b.type]) continue;
+        const gs = glowSprite(b.type, b.r);
+        ctx.globalAlpha = 0.55 + 0.25 * Math.sin(t * 6 + b.x);
+        ctx.drawImage(gs.c, b.x - gs.ox, b.y - gs.oy, gs.w, gs.h);
+      }
+      ctx.globalAlpha = 1;
+      for (const b of bs) {
+        const s = sprite(b.type, b.r);
+        ctx.drawImage(s.c, b.x - s.ox, b.y - s.oy, s.w, s.h);
+        if (b.type === "gold") {   // the twinkle on gold balloons, live
+          const r = b.r, k = r * (0.28 + 0.08 * Math.sin(t * 9)), cx = b.x + r * 0.35, cy = b.y - r * 0.55;
+          ctx.fillStyle = "rgba(255,255,255,.95)";
+          ctx.beginPath(); ctx.moveTo(cx, cy - k); ctx.lineTo(cx + k * 0.22, cy); ctx.lineTo(cx, cy + k); ctx.lineTo(cx - k * 0.22, cy); ctx.closePath(); ctx.fill();
+        }
+      }
+    }
+
+    // shards and drops: same look, but each shard is placed with one setTransform instead of save/rotate/restore
+    if (particles.length) {
+      const bx = sx * DPR, by = sy * DPR;
+      for (const p of particles) {
+        ctx.globalAlpha = clamp(p.life / 0.6, 0, 1); ctx.fillStyle = p.col;
+        if (p.shard) {
+          const c = Math.cos(p.rot) * DPR, s = Math.sin(p.rot) * DPR;
+          ctx.setTransform(c, s, -s, c, bx + p.x * DPR, by + p.y * DPR);
+          ctx.fillRect(-p.size, -p.size * 0.4, p.size * 2, p.size * 0.8);
+        } else {
+          ctx.setTransform(DPR, 0, 0, DPR, bx, by);
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      ctx.setTransform(DPR, 0, 0, DPR, sx * DPR, sy * DPR);
+      ctx.globalAlpha = 1;
+    }
 
     // hit markers (CS-style)
     for (const m of marks) {
@@ -914,68 +1254,73 @@
       ctx.stroke();
     }
 
-    // popups
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    for (const p of popups) {
-      ctx.globalAlpha = clamp(p.life / 0.4, 0, 1);
-      ctx.font = `bold ${p.size}px ${SERIF}`;
-      ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.65)"; ctx.strokeText(p.text, p.x, p.y);
-      ctx.fillStyle = p.col; ctx.fillText(p.text, p.x, p.y);
+    // popups (the font is switched only when the size changes)
+    if (popups.length) {
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.65)"; ctx.lineJoin = "round";
+      let font = "";
+      for (const p of popups) {
+        ctx.globalAlpha = clamp(p.life / 0.4, 0, 1);
+        const f = `bold ${p.size}px ${SERIF}`;
+        if (f !== font) { ctx.font = f; font = f; }
+        ctx.strokeText(p.text, p.x, p.y);
+        ctx.fillStyle = p.col; ctx.fillText(p.text, p.x, p.y);
+      }
+      ctx.globalAlpha = 1;
     }
-    ctx.globalAlpha = 1;
-    ctx.restore();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
-    // sniper: looking through a scope — dark round edges, thin lens ring
+    // sniper: looking through a scope — dark round edges, thin lens ring (the darkening is pre-drawn once)
     if (S && S.mode === "sniper" && running) {
-      const cx = FX + FW / 2, rr = Math.hypot(FW, H) * 0.5;
-      const v = ctx.createRadialGradient(cx, H / 2, Math.min(FW, H) * 0.42, cx, H / 2, rr);
-      v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(0.55, "rgba(0,0,0,0.55)"); v.addColorStop(1, "rgba(0,0,0,0.9)");
-      ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+      ctx.drawImage(overlay("scope"), 0, 0, W, H);
       ctx.strokeStyle = "rgba(214,176,112,0.18)"; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(cx, H / 2, Math.min(FW, H) * 0.47, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(FX + FW / 2, H / 2, Math.min(FW, H) * 0.47, 0, Math.PI * 2); ctx.stroke();
       if (S.timeLeft < 10) { ctx.fillStyle = `rgba(200,30,30,${0.06 + 0.05 * Math.sin(t * 8)})`; ctx.fillRect(0, 0, W, H); }
     }
-    // slow-mo tint
-    if (S && S.real < S.slowUntil && running) {
-      const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
-      v.addColorStop(0, "rgba(120,190,255,0)"); v.addColorStop(1, "rgba(120,190,255,0.28)");
-      ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
-    }
+    // slow-mo tint (pre-drawn once)
+    if (S && S.real < S.slowUntil && running) ctx.drawImage(overlay("slow"), 0, 0, W, H);
     if (S && S.flash > 0) { ctx.fillStyle = `rgba(${S.flashCol},${S.flash * 0.45})`; ctx.fillRect(0, 0, W, H); }
 
     // countdown
     if (running && countdown > 0) {
       const n = Math.ceil(countdown), f = countdown - Math.floor(countdown);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.font = `bold ${90 + f * 40}px ${SERIF}`; ctx.fillStyle = `rgba(240,210,148,${0.4 + f * 0.6})`;
       ctx.fillText(n > 0 ? String(n) : "", FX + FW / 2, H / 2);
     }
-
-    // grain (skipped on a weak phone after auto-quality kicked in)
-    if (quality === 1) {
-      ctx.globalAlpha = 1;
-      const ox = (Math.random() * 160) | 0, oy = (Math.random() * 160) | 0;
-      ctx.save(); ctx.translate(-ox, -oy); ctx.fillStyle = grainPat; ctx.fillRect(0, 0, W + 160, H + 160); ctx.restore();
-    }
+    // film grain is the #grain layer on top of the canvas (moved by the compositor, not drawn here)
   }
 
   // ---------- HUD / screens ----------
   let lastLives = -1;
+  // the page is only touched where something actually changed — each DOM write can cost a re-layout on a weak phone
+  const hudCache = {};
+  function put(id, v, html) {
+    if (hudCache[id] === v) return;
+    hudCache[id] = v;
+    if (html) $(id).innerHTML = v; else $(id).textContent = v;
+  }
+  function putStyle(id, prop, v) {
+    const k = id + "." + prop;
+    if (hudCache[k] === v) return;
+    hudCache[k] = v; $(id).style[prop] = v;
+  }
   function updateHud() {
     if (!S) return;
-    $("score").textContent = S.score.toLocaleString("ru-RU");
-    const c = $("combo"), m = mult();
+    put("score", S.score.toLocaleString("ru-RU"));
+    const m = mult();
     if (S.mode === "sniper") {
-      c.textContent = "серия в голову " + S.hstreak + " · ×" + m;
-      c.style.opacity = S.hstreak >= 2 ? 1 : 0;
-      $("ammoN").textContent = S.ammo;
+      put("combo", "серия в голову " + S.hstreak + " · ×" + m);
+      putStyle("combo", "opacity", S.hstreak >= 2 ? "1" : "0");
+      put("ammoN", String(S.ammo));
       const s = Math.max(0, Math.ceil(S.timeLeft));
-      $("timeN").textContent = "0:" + String(s).padStart(2, "0");
-      $("timeN").style.color = s <= 10 ? "#ff4d45" : "";
+      put("timeN", "0:" + String(s).padStart(2, "0"));
+      putStyle("timeN", "color", s <= 10 ? "#ff4d45" : "");
       return;
     }
-    c.textContent = "комбо " + S.combo + " · ×" + m;
-    c.style.opacity = S.combo >= 2 ? 1 : 0;
-    $("goal").innerHTML = goalText(S.score);
+    put("combo", "комбо " + S.combo + " · ×" + m);
+    putStyle("combo", "opacity", S.combo >= 2 ? "1" : "0");
+    put("goal", goalText(S.score), true);
     if (S.lives !== lastLives) {
       lastLives = S.lives;
       const box = $("lives"); box.innerHTML = "";
@@ -991,7 +1336,9 @@
   let backTarget = null;
   if (tgBack) tgBack.onClick(() => { if (backTarget) show(backTarget); });
 
+  let curScreen = "menu";
   function show(id) {
+    curScreen = id;
     for (const s of document.querySelectorAll(".screen")) s.classList.toggle("on", s.id === id);
     const scr = id && document.getElementById(id);
     if (scr) scr.scrollTop = 0;
@@ -1049,17 +1396,37 @@
   $("menuBtn").onclick = () => { S = null; show("menu"); };
   const muteBtn = $("muteBtn");
   const syncMute = () => muteBtn.textContent = muted ? "звук: выкл" : "звук: вкл";
-  muteBtn.onclick = (e) => { e.stopPropagation(); muted = !muted; store.set("fs_mute", muted); syncMute(); };
+  muteBtn.onclick = (e) => { e.stopPropagation(); setMuted(!muted); store.set("fs_mute", muted); syncMute(); if (!muted) audio(); };
+  muteBtn.addEventListener("pointerdown", (e) => e.stopPropagation());   // tapping «звук» is not a shot
   syncMute();
 
-  document.addEventListener("visibilitychange", () => { if (document.hidden && ac) ac.suspend(); });
+  // app hidden (call, home button) — sound sleeps; back — it wakes up (sounds are never queued meanwhile)
+  document.addEventListener("visibilitychange", () => {
+    if (!ac) return;
+    if (document.hidden) wake(false); else if (!muted) wake(true);
+  });
 
   // ?debug=1 — peek at the game state from the console (for testing only)
   if (/[?&]debug=1/.test(location.search)) window.__fs = {
     get S() { return S; },
     // x, y in field coordinates (like balloon.x / balloon.y); kind — "mouse" or "touch"
     tap: (x, y, kind) => onTap({ clientX: x + FX, clientY: y, pointerType: kind || "mouse", preventDefault() {} }),
-    field: () => ({ W, H, FX, FW, R, DPR, quality, paused }),
+    field: () => ({ W, H, FX, FW, R, DPR, level, paused }),
+    sound: () => ({ ready: Object.keys(SND).length, of: Object.keys(RECIPES).length, state: ac && ac.state, voices, muted }),
+    fx: () => ({ particles: particles.length, pool: pool.length, popups: popups.length, sprites: sprites.size }),
+    // drawing cost of a busy screen (n balloons of every type): the old way (gradients every frame) vs sprites
+    bench: (n = 40, reps = 200) => {
+      const kinds = ["red", "red", "red", "gold", "cursed", "ice", "spirit", "bunch"], bs = [];
+      for (let i = 0; i < n; i++) bs.push({ type: kinds[i % kinds.length], x: 40 + (i * 53) % (FW - 80), y: 80 + (i * 97) % (H - 160), r: R });
+      const timeIt = (fn) => { ctx.getImageData(0, 0, 1, 1); const t0 = performance.now(); for (let k = 0; k < reps; k++) fn(k / 60); ctx.getImageData(0, 0, 1, 1); return (performance.now() - t0) / reps; };
+      const old = timeIt((t) => { for (const b of bs) drawBalloon(ctx, b.x, b.y, b.r, b.type, t); });
+      const neu = timeIt((t) => {
+        for (const b of bs) if (GLOW[b.type]) { const g = glowSprite(b.type, b.r); ctx.globalAlpha = 0.6; ctx.drawImage(g.c, b.x - g.ox, b.y - g.oy, g.w, g.h); }
+        ctx.globalAlpha = 1;
+        for (const b of bs) { const s = sprite(b.type, b.r); ctx.drawImage(s.c, b.x - s.ox, b.y - s.oy, s.w, s.h); }
+      });
+      return { balloons: n, oldMsPerFrame: +old.toFixed(3), newMsPerFrame: +neu.toFixed(3), faster: +(old / neu).toFixed(1) };
+    },
     // first n entries of a day's timetable — compared against the bot's copy in tests
     plan: (day, n) => { const g = spawnPlan(dailySeed(day), "daily"), out = []; for (let i = 0; i < n; i++) { const e = g.next().value; out.push([+e.at.toFixed(6), e.type]); } return out; }
   };
@@ -1070,6 +1437,8 @@
   syncCloud();
   // the menu is HTML, but canvas text (countdown, popups) needs PT Serif loaded — redraw nothing, just warm it up
   try { document.fonts && document.fonts.load("bold 20px 'PT Serif'"); } catch (e) {}
+  // sounds are prepared in the background right after the menu appears (ready long before the first tap of a run)
+  setTimeout(() => { bakeAll().catch(() => {}); }, 250);
   requestAnimationFrame((t) => { last = t; frame(t); });
 })();
 </script>
