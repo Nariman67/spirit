@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Поймай дух · Free Spirit</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!-- one font everywhere: Georgia is missing on Android, PT Serif (with Cyrillic) looks the same on every phone and PC -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=PT+Serif:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0b09; --bg2: #17120c; --gold: #d6b070; --gold-hi: #f0d294; --gold-lo: #96703a;
+    --cream: #ece2cd; --mute: #8a7d68; --red: #e6332e;
+    --serif: "PT Serif", Georgia, "Times New Roman", serif;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--cream); overflow: hidden;
+    font-family: var(--serif); user-select: none; -webkit-user-select: none; touch-action: none;
+    -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-touch-callout: none; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #c { cursor: crosshair; }
+  button { touch-action: manipulation; font-family: var(--serif); }
+  img { -webkit-user-drag: none; user-select: none; }
+  #rotate { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; flex-direction: column;
+    background: rgba(13,11,9,.96); color: var(--cream); font-size: 18px; text-align: center; padding: 24px; gap: 12px; }
+  #rotate.on { display: flex; }
+  #rotate b { color: var(--gold); font-size: 44px; }
+  .screen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px 22px calc(24px + env(safe-area-inset-bottom)); text-align: center; z-index: 5;
+    background: radial-gradient(ellipse at 50% 30%, rgba(214,176,112,.10), transparent 60%), rgba(13,11,9,.86); }
+  .screen.on { display: flex; }
+  /* tall screens scroll instead of being clipped at the top; short ones stay centred thanks to the spacers */
+  .screen { justify-content: flex-start; overflow-y: auto; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+  .screen::before, .screen::after { content: ""; flex: 1 0 0; }
+  .logo { width: min(86vw, 420px); filter: drop-shadow(0 0 18px rgba(214,176,112,.18)); }
+  .spaced { letter-spacing: .38em; font-size: 13px; color: var(--gold); font-weight: bold; text-transform: uppercase; margin: 10px 0 0 .38em; }
+  .title { font-size: 34px; color: var(--cream); margin: 14px 0 4px; }
+  .title i { color: var(--gold); }
+  .divider { width: min(70vw, 320px); height: 14px; margin: 14px auto; position: relative; }
+  .divider:before, .divider:after { content: ""; position: absolute; top: 6px; height: 2px; width: calc(50% - 16px); background: var(--gold); opacity: .8; }
+  .divider:before { left: 0; } .divider:after { right: 0; }
+  .divider i { position: absolute; left: 50%; top: 0; width: 10px; height: 10px; border: 2px solid var(--gold); transform: translateX(-50%) rotate(45deg); margin-top: 1px; }
+  .btn { display: block; width: min(80vw, 330px); margin: 8px auto; padding: 15px 18px; border-radius: 40px; font: bold 16px var(--serif);
+    letter-spacing: .06em; text-transform: uppercase; cursor: pointer; border: 1.5px solid rgba(214,176,112,.55); background: rgba(0,0,0,.35); color: var(--cream);
+    -webkit-appearance: none; appearance: none; line-height: 1.25; }
+  .btn.gold { background: linear-gradient(#f0d294, #96703a); color: #1a140c; border-color: #fae6b4; box-shadow: 0 0 24px rgba(214,176,112,.28); }
+  .btn:active { transform: scale(.97); }
+  .btn .sub { display: block; font-weight: normal; font-size: 11px; letter-spacing: .04em; text-transform: none; opacity: .75; margin-top: 3px; }
+  #ammo { font-size: 14px; color: var(--cream); text-align: right; line-height: 1.5; display: none; }
+  #ammo b { color: var(--gold); font-size: 22px; }
+  .small { font-size: 13px; color: var(--mute); margin-top: 6px; line-height: 1.5; }
+  .best { margin: 6px 0 14px; font-size: 15px; color: var(--mute); }
+  .best b { color: var(--gold); font-size: 18px; }
+  .rank { display: inline-block; margin-top: 6px; padding: 4px 14px; border: 1px solid rgba(214,176,112,.5); border-radius: 20px; color: var(--gold); font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
+  /* how to */
+  .rules { width: min(90vw, 400px); text-align: left; margin: 6px 0 12px; }
+  .rule { display: flex; align-items: center; gap: 14px; padding: 8px 12px; margin: 6px 0; border: 1px solid rgba(214,176,112,.35); border-radius: 12px; background: rgba(0,0,0,.35); }
+  .rule canvas { position: static; width: 38px; height: 46px; flex: 0 0 38px; }
+  .rule b { color: var(--gold); display: block; font-size: 15px; }
+  .rule span { font-size: 13px; color: var(--cream); opacity: .85; }
+  .tips { font-size: 13px; color: var(--cream); opacity: .85; width: min(90vw, 400px); line-height: 1.55; text-align: left; }
+  .tips b { color: var(--gold); }
+  .scroll { width: 100%; display: flex; flex-direction: column; align-items: center; flex: 0 0 auto; }
+  /* hud */
+  #hud { position: fixed; left: 0; right: 0; top: 0; z-index: 3; display: none; padding: calc(10px + env(safe-area-inset-top)) 16px 0; pointer-events: none; }
+  #hud.on { display: block; }
+  .hrow { display: flex; justify-content: space-between; align-items: flex-start; }
+  #score { font-size: 40px; color: var(--cream); line-height: 1; text-shadow: 0 2px 10px rgba(0,0,0,.6); }
+  #modeLbl { font-size: 11px; letter-spacing: .3em; color: var(--gold); text-transform: uppercase; margin-top: 4px; }
+  #combo { margin-top: 8px; display: inline-block; padding: 3px 12px; border-radius: 16px; font-size: 14px; font-weight: bold; color: #1a140c;
+    background: linear-gradient(#f0d294, #96703a); opacity: 0; transition: opacity .2s, transform .15s; }
+  #lives { display: flex; gap: 6px; pointer-events: auto; }
+  #lives canvas { position: static; width: 20px; height: 26px; }
+  #muteBtn { pointer-events: auto; margin-top: 10px; background: none; border: 1px solid rgba(214,176,112,.4); color: var(--gold); border-radius: 14px; font-size: 12px; padding: 3px 10px; font-family: var(--serif); }
+  /* game over */
+  #finalScore { font-size: 64px; color: var(--cream); margin: 4px 0; line-height: 1; }
+  #newRec { color: #1a140c; background: var(--gold); font-weight: bold; font-size: 12px; letter-spacing: .2em; padding: 4px 12px; border-radius: 12px; display: none; margin-bottom: 6px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: min(86vw, 360px); margin: 14px 0; }
+  .stat { border: 1px solid rgba(214,176,112,.35); border-radius: 12px; padding: 8px; background: rgba(0,0,0,.35); }
+  .stat b { display: block; color: var(--gold); font-size: 20px; }
+  .stat span { font-size: 12px; color: var(--mute); }
+  #sendNote { font-size: 13px; color: var(--mute); min-height: 18px; margin-top: 4px; }
+  #goal { font-size: 13px; color: var(--cream); margin-top: 6px; opacity: .9; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+  #goal b { color: var(--gold); }
+  .board { width: min(84vw, 340px); margin: 0 0 14px; padding: 10px 14px; border: 1px solid rgba(214,176,112,.35); border-radius: 12px;
+    background: rgba(0,0,0,.35); font-size: 14px; line-height: 1.7; display: none; }
+  .board .bt { font-size: 11px; letter-spacing: .3em; color: var(--gold); text-transform: uppercase; }
+  .board b { color: var(--gold); }
+  #placeLine { margin-top: 10px; font-size: 15px; color: var(--cream); min-height: 20px; }
+  #placeLine b { color: var(--gold); }
+  /* rating */
+  .av { border-radius: 50%; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: bold; flex: 0 0 auto; box-shadow: 0 0 0 2px rgba(214,176,112,.55); font-family: -apple-system, "Segoe UI", sans-serif; }
+  .av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .tabs { display: flex; gap: 6px; width: min(92vw, 400px); margin: 4px 0 16px; }
+  .tab { flex: 1; padding: 9px 6px; border-radius: 20px; border: 1px solid rgba(214,176,112,.45); background: rgba(0,0,0,.3);
+    color: var(--cream); font: bold 11px var(--serif); letter-spacing: .04em; text-transform: uppercase; cursor: pointer;
+    -webkit-appearance: none; appearance: none; white-space: nowrap; }
+  .tab.on { background: linear-gradient(#f0d294, #96703a); color: #1a140c; border-color: #fae6b4; }
+  .podium { display: flex; align-items: flex-end; justify-content: center; gap: 8px; width: min(92vw, 400px); margin-bottom: 6px; }
+  .pcol { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  .pcol .nm { font-size: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 6px; }
+  .pcol .sc { color: var(--gold); font-weight: bold; font-size: 15px; }
+  .pcol.me .nm { color: var(--gold); }
+  .ped { width: 100%; margin-top: 6px; border-radius: 10px 10px 0 0; border: 1px solid rgba(214,176,112,.4); border-bottom: none;
+    background: linear-gradient(rgba(214,176,112,.30), rgba(214,176,112,.03)); display: flex; justify-content: center; padding-top: 6px; font-size: 22px; }
+  .rlist { width: min(92vw, 400px); }
+  .rrow { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid rgba(214,176,112,.14); font-size: 14px; }
+  .rrow .pl { width: 24px; color: var(--mute); text-align: right; flex: 0 0 24px; }
+  .rrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+  .rrow .sc { color: var(--gold); font-weight: bold; }
+  .rrow.me { background: rgba(214,176,112,.14); border-radius: 10px; border-bottom-color: transparent; }
+  .rnote { font-size: 13px; color: var(--mute); margin: 10px 0; width: min(92vw, 400px); line-height: 1.5; }
+  .rnote b { color: var(--gold); }
+  .mini { display: flex; justify-content: center; gap: 16px; margin-top: 6px; }
+  .mini > div { display: flex; flex-direction: column; align-items: center; font-size: 12px; gap: 4px; }
+  .mini b { font-size: 13px; }
+  .champ { margin-top: 8px; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="rotate"><b>↻</b>Поверни телефон вертикально —<br>игра ждёт</div>
+
+<div id="hud">
+  <div class="hrow">
+    <div>
+      <div id="score">0</div>
+      <div id="modeLbl">забег дня</div>
+      <div id="goal"></div>
+      <div id="combo">×1</div>
+    </div>
+    <div style="text-align:right">
+      <div id="lives"></div>
+      <div id="ammo"><b id="ammoN">25</b> патронов<br><b id="timeN">0:45</b></div>
+      <button id="muteBtn">звук: вкл</button>
+    </div>
+  </div>
+</div>
+
+<div id="menu" class="screen on">
+  <img class="logo" src="logo.png" alt="Free Spirit">
+  <div class="spaced">игра канала</div>
+  <div class="divider"><i></i></div>
+  <div class="title">поймай <i>дух</i></div>
+  <div id="hello" class="small"></div>
+  <div class="best" id="bestLine"></div>
+  <div class="board" id="boardLine"></div>
+  <button class="btn gold" id="playDaily">Забег дня<span class="sub">выживание · рейтинг канала</span></button>
+  <button class="btn" id="playSniper">Снайпер<span class="sub">25 патронов · 45 секунд · только точность</span></button>
+  <button class="btn" id="rateBtn">Рейтинг<span class="sub">день · неделя · зал славы</span></button>
+  <button class="btn" id="howBtn">Как играть</button>
+  <div class="small">забег дня одинаковый для всех — побеждает реакция, а не удача</div>
+</div>
+
+<div id="howto" class="screen">
+  <div class="scroll">
+    <div class="title" style="margin-top:8px">как <i>играть</i></div>
+    <div class="divider"><i></i></div>
+    <div class="rules" id="rules"></div>
+    <div class="tips">
+      <b>В голову.</b> Попал точно в центр шарика — очки ×2.<br>
+      <b>Комбо.</b> Попадаешь подряд — множитель растёт до ×4. Тыкнул мимо или упустил шарик — комбо сгорает.<br>
+      <b>Жизни.</b> Их три. Каждые 2500 очков — ещё одна, максимум пять.<br><br>
+      <b>Снайпер.</b> Жизней нет: 25 патронов и 45 секунд. Каждое нажатие — патрон.
+      «В голову» даёт ×4 и возвращает патрон, серия «в голову» подряд растит множитель.
+      Попал в корпус — серия сгорает. Проклятый: −50 очков и −3 секунды.
+    </div>
+    <button class="btn gold" id="howOk" style="margin-top:16px">Понятно</button>
+  </div>
+</div>
+
+<div id="over" class="screen">
+  <div class="spaced" id="overTitle">дух ушёл</div>
+  <div class="divider"><i></i></div>
+  <div id="newRec">новый рекорд</div>
+  <div id="finalScore">0</div>
+  <div class="rank" id="finalRank">новичок</div>
+  <div id="placeLine"></div>
+  <div class="stats">
+    <div class="stat"><b id="stPops">0</b><span>лопнул</span></div>
+    <div class="stat"><b id="stHead">0%</b><span>в голову</span></div>
+    <div class="stat"><b id="stCombo">0</b><span id="stComboL">макс. комбо</span></div>
+    <div class="stat"><b id="stTime">0:00</b><span id="stTimeL">продержался</span></div>
+  </div>
+  <button class="btn gold" id="sendBtn">Отправить в рейтинг</button>
+  <div id="sendNote"></div>
+  <button class="btn" id="againBtn">Ещё раз</button>
+  <button class="btn" id="overRateBtn">Рейтинг</button>
+  <button class="btn" id="menuBtn">В меню</button>
+</div>
+
+<div id="rating" class="screen">
+  <div class="scroll">
+    <div class="title" style="margin-top:8px">рейтинг</div>
+    <div class="divider"><i></i></div>
+    <div class="tabs">
+      <button class="tab on" data-k="D">сегодня</button>
+      <button class="tab" data-k="W">неделя</button>
+      <button class="tab" data-k="A">зал славы</button>
+    </div>
+    <div class="podium" id="podium"></div>
+    <div class="rlist" id="rlist"></div>
+    <div class="rnote" id="rme"></div>
+    <div class="spaced" style="margin-top:14px">чемпионы прошлой недели</div>
+    <div class="podium" id="prevweek" style="margin-top:12px"></div>
+    <div class="rnote" id="rupd"></div>
+    <button class="btn" id="ratingBack">Назад</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------- Telegram ----------
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    try { tg.ready(); tg.expand(); tg.setHeaderColor("#0d0b09"); tg.setBackgroundColor("#0d0b09"); } catch (e) {}
+    try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+  }
+  const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+  const haptic = (kind) => {
+    try {
+      if (!tg || !tg.HapticFeedback) return;
+      if (kind === "error" || kind === "success") tg.HapticFeedback.notificationOccurred(kind);
+      else tg.HapticFeedback.impactOccurred(kind);
+    } catch (e) {}
+  };
+
+  const tgAtLeast = (v) => { try { return !!(tg && tg.isVersionAtLeast && tg.isVersionAtLeast(v)); } catch (e) { return false; } };
+
+  // ---------- storage ----------
+  // Records live in three places: memory, localStorage (this device) and Telegram CloudStorage
+  // (tied to the Telegram account, so the phone and the PC show the same best). Any of them may be unavailable.
+  const cloud = tgAtLeast("6.9") && tg.CloudStorage ? tg.CloudStorage : null;
+  const store = {
+    mem: {},
+    get(k, d) {
+      if (k in this.mem) return this.mem[k];
+      try { const v = localStorage.getItem(k); if (v !== null) return (this.mem[k] = JSON.parse(v)); } catch (e) {}
+      return d;
+    },
+    set(k, v) {
+      this.mem[k] = v;
+      try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {}
+      try { if (cloud) cloud.setItem(k, JSON.stringify(v)); } catch (e) {}
+    }
+  };
+  // pull the account's records once at start; numbers merge by maximum, so nothing is ever lost
+  function syncCloud() {
+    if (!cloud) return;
+    const keys = ["fs_best", "fs_best_sniper", "fs_mute", "fs_daily_" + today()];
+    try {
+      cloud.getItems(keys, (err, vals) => {
+        if (err || !vals) return;
+        let changed = false;
+        for (const k of keys) {
+          const local = store.get(k, undefined);
+          let remote;
+          try { remote = vals[k] ? JSON.parse(vals[k]) : undefined; } catch (e) { remote = undefined; }
+          let merged = local;
+          if (typeof remote === "number") merged = Math.max(remote, typeof local === "number" ? local : 0);
+          else if (remote !== undefined && local === undefined) merged = remote;
+          if (merged !== local) { store.mem[k] = merged; try { localStorage.setItem(k, JSON.stringify(merged)); } catch (e) {} changed = true; }
+          if (merged !== undefined && merged !== remote) { try { cloud.setItem(k, JSON.stringify(merged)); } catch (e) {} }
+        }
+        if (changed) { muted = store.get("fs_mute", false); syncMute(); if (!S) refreshMenu(); }
+      });
+    } catch (e) {}
+  }
+
+  // ---------- helpers ----------
+  const $ = (id) => document.getElementById(id);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const SERIF = '"PT Serif", Georgia, "Times New Roman", serif';   // same as --serif in CSS, for canvas text
+  const lerp = (a, b, t) => a + (b - a) * t;
+  // day in Moscow time, so everyone shares the same daily run
+  const today = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const RANKS = [[0, "новичок"], [500, "свой"], [1500, "охотник"], [3000, "дух"], [6000, "свободный дух"], [10000, "легенда"]];
+  const rankOf = (s) => { let r = RANKS[0][1]; for (const [min, name] of RANKS) if (s >= min) r = name; return r; };
+  // sniper is judged by accuracy, not by score
+  const sniperRank = (acc) => acc >= 0.8 ? "глаз-алмаз" : acc >= 0.6 ? "снайпер" : acc >= 0.4 ? "стрелок" : "мазила";
+  const SNIPER_AMMO = 25, SNIPER_TIME = 45, SNIPER_AMMO_MAX = 30;
+
+  // ---------- rating from the bot ----------
+  // The bot opens the game as GAME_URL#d=<day>&k=1&b=<base64 json> (see _pack in guard/game.py):
+  //   n — [[name, username]], D/W/A — [[user index, score]] day / week / all-time, P — last week's top-3,
+  //   me — [[place, score]] for D/W/A, mi — the player's own index, u — when it was made (MSK).
+  // k=1 means the game was opened by the bot's keyboard button — only then sendData reaches the bot.
+  const BOARD = (() => {
+    const q = new URLSearchParams(location.hash.slice(1));
+    const out = { ok: false, kb: q.get("k") === "1", data: null, top: [], me: 0 };
+    try {
+      const b = q.get("b");
+      if (b) {
+        const s = atob(b.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - b.length % 4) % 4));
+        out.data = JSON.parse(new TextDecoder().decode(Uint8Array.from(s, (c) => c.charCodeAt(0))));
+      }
+    } catch (e) { out.data = null; }
+    const d = out.data;
+    if (d && Array.isArray(d.n) && Array.isArray(d.D)) {
+      out.ok = d.d === today();
+      if (out.ok) { out.top = d.D.slice(0, 3).map((r) => r[1]); out.me = (d.me && d.me[0] && d.me[0][1]) || 0; }
+    } else out.data = null;
+    return out;
+  })();
+
+  // Telegram-like avatar: coloured circle with a letter; the real photo on top if the person has a public @username
+  const AV_COLS = [["#e17076", "#ff885e"], ["#7bc862", "#a2de75"], ["#65aadd", "#7dc1f5"], ["#a695e7", "#c09ff5"],
+    ["#ee7aae", "#f78fc1"], ["#6ec9cb", "#82d6d8"], ["#faa774", "#ffbe8a"]];
+  function avatar(name, username, size, isMe) {
+    const d = document.createElement("div");
+    d.className = "av"; d.style.width = d.style.height = size + "px";
+    const chars = [...String(name || "?").trim()];
+    const h = chars.reduce((a, c) => a + c.codePointAt(0), 0) % AV_COLS.length;
+    d.style.background = `linear-gradient(${AV_COLS[h][1]}, ${AV_COLS[h][0]})`;
+    const letter = document.createElement("span");
+    letter.textContent = (chars.find((c) => /\p{L}|\p{N}/u.test(c)) || "?").toUpperCase();
+    letter.style.fontSize = Math.round(size * 0.42) + "px";
+    d.appendChild(letter);
+    const src = isMe && tgUser && tgUser.photo_url ? tgUser.photo_url
+      : username ? "https://t.me/i/userpic/320/" + encodeURIComponent(username) + ".jpg" : "";
+    if (src) {
+      const img = new Image();
+      img.alt = ""; img.referrerPolicy = "no-referrer";
+      img.onload = () => { if (img.naturalWidth > 1) d.appendChild(img); };
+      img.src = src;
+    }
+    return d;
+  }
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+  const who = (i) => (BOARD.data && BOARD.data.n[i]) || ["?", ""];
+
+  function podiumCol(row, place, size, pedH) {
+    const [i, score] = row, [name, user] = who(i), me = i === BOARD.data.mi;
+    const c = el("div", "pcol" + (me ? " me" : ""));
+    c.appendChild(avatar(name, user, size, me));
+    c.appendChild(el("div", "nm", me ? name + " (ты)" : name));
+    c.appendChild(el("div", "sc", fmt(score)));
+    if (pedH) { const p = el("div", "ped", MEDALS[place]); p.style.height = pedH + "px"; c.appendChild(p); }
+    else c.appendChild(el("div", "", MEDALS[place]));
+    return c;
+  }
+
+  let rateTab = "D";
+  function renderRating() {
+    const pod = $("podium"), list = $("rlist"), meBox = $("rme"), prev = $("prevweek"), upd = $("rupd");
+    pod.innerHTML = list.innerHTML = prev.innerHTML = meBox.innerHTML = upd.innerHTML = "";
+    for (const t of document.querySelectorAll("#rating .tab")) t.classList.toggle("on", t.dataset.k === rateTab);
+    const data = BOARD.data;
+    if (!data) {
+      meBox.innerHTML = "Рейтинг приходит от бота. Открой игру через <b>@nnariman_bot</b> — кнопка «🎈 Играть».";
+      return;
+    }
+    const rows = data[rateTab] || [];
+    if (!rows.length) meBox.innerHTML = "Тут пока пусто — <b>сыграй забег дня</b> и займи первое место.";
+    // podium: 2nd — 1st — 3rd
+    const order = [[1, 66, 46], [0, 82, 70], [2, 60, 30]];
+    for (const [k, size, h] of order) if (rows[k]) pod.appendChild(podiumCol(rows[k], k, size, h));
+    rows.slice(3).forEach((row, j) => {
+      const [i, score] = row, [name, user] = who(i), me = i === data.mi;
+      const r = el("div", "rrow" + (me ? " me" : ""));
+      r.appendChild(el("div", "pl", String(j + 4)));
+      r.appendChild(avatar(name, user, 32, me));
+      r.appendChild(el("div", "nm", me ? name + " (ты)" : name));
+      r.appendChild(el("div", "sc", fmt(score)));
+      list.appendChild(r);
+    });
+    const [place, best] = data.me[{ D: 0, W: 1, A: 2 }[rateTab]] || [0, 0];
+    if (rows.length) {
+      if (!place) meBox.innerHTML = "Тебя здесь пока нет — сыграй «Забег дня» и отправь результат.";
+      else if (place > rows.length) meBox.innerHTML = `Твоё место: <b>${place}</b> · ${fmt(best)}`;
+    }
+    const P = data.P || [];
+    if (P.length) [[1, 52, 0], [0, 64, 0], [2, 48, 0]].forEach(([k, size]) => { if (P[k]) prev.appendChild(podiumCol(P[k], k, size, 0)); });
+    else prev.appendChild(el("div", "rnote", "первая неделя — чемпионы появятся в понедельник"));
+    upd.innerHTML = (data.d !== today() ? `рейтинг за ${data.d} — открой игру заново через бота, чтобы обновить.<br>` : "") +
+      `обновлено в ${data.u} мск · обновляется каждый раз, когда кто-то отправляет результат`;
+  }
+  for (const t of document.querySelectorAll("#rating .tab")) t.onclick = () => { rateTab = t.dataset.k; renderRating(); };
+  const MEDALS = ["🥇", "🥈", "🥉"];
+  const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
+  // "до 🥉 — 300" while playing the daily run
+  function goalText(score) {
+    if (!BOARD.ok || !BOARD.top.length) return "";
+    if (score > BOARD.top[0]) return "<b>ты первый сегодня</b>";
+    for (let i = BOARD.top.length - 1; i >= 0; i--) if (score <= BOARD.top[i]) return `до ${MEDALS[i]} — <b>${fmt(BOARD.top[i] - score + 1)}</b>`;
+    return "";
+  }
+  function placeText(score) {
+    if (!BOARD.ok) return "";
+    const above = BOARD.top.filter((s) => s >= score).length;
+    if (above < 3 || BOARD.top.length < 3) return `с этим результатом — <b>${above + 1} место</b> дня`;
+    return `до 3 места не хватило <b>${fmt(BOARD.top[2] - score + 1)}</b>`;
+  }
+
+  // ---------- canvas ----------
+  const cv = $("c"), ctx = cv.getContext("2d");
+  // film grain tile
+  const grain = document.createElement("canvas");
+  grain.width = grain.height = 160;
+  (() => {
+    const g = grain.getContext("2d"), id = g.createImageData(160, 160);
+    for (let i = 0; i < id.data.length; i += 4) { const v = Math.random() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 16; }
+    g.putImageData(id, 0, 0);
+  })();
+
+  // W×H — the window; FX/FW — the play field. The field is never wider than 9:16 portrait,
+  // so a wide PC window, a tablet and a phone all get the same proportions (fair daily run).
+  let W = 0, H = 0, DPR = 1, R = 30, FX = 0, FW = 0, quality = 1;
+  let bgGrad = null, glowGrad = null, grainPat = null;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2) * quality;
+    W = window.innerWidth; H = window.innerHeight;
+    FW = Math.min(W, Math.round(H * 0.5625)); FX = Math.round((W - FW) / 2);
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    R = clamp(FW * 0.075, 22, 46);
+    // gradients and grain are built once per size, not every frame (cheap phones stay smooth)
+    bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    bgGrad.addColorStop(0, "#0d0b09"); bgGrad.addColorStop(1, "#1a140d");
+    glowGrad = ctx.createRadialGradient(W / 2, H * 0.62, 0, W / 2, H * 0.62, Math.max(FW, H) * 0.7);
+    glowGrad.addColorStop(0, "rgba(214,176,112,0.10)"); glowGrad.addColorStop(1, "rgba(214,176,112,0)");
+    grainPat = ctx.createPattern(grain, "repeat");
+    const hud = document.getElementById("hud");
+    hud.style.left = FX + "px"; hud.style.right = "auto"; hud.style.width = FW + "px";
+    checkOrientation();
+  }
+  window.addEventListener("resize", resize);
+
+  // phone held sideways: the field would be tiny — ask to turn it back
+  function checkOrientation() {
+    const touch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    const bad = touch && W > H && H < 520;
+    document.getElementById("rotate").classList.toggle("on", bad);
+    paused = bad;   // the run waits while the phone is sideways
+  }
+
+  // ---------- sound (WebAudio, synthesized — no files) ----------
+  let ac = null, muted = store.get("fs_mute", false);
+  function audio() { if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } if (ac && ac.state === "suspended") ac.resume(); return ac; }
+  function tone(freq, dur, type, vol, slideTo) {
+    if (muted || !audio()) return;
+    const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+  }
+  function noise(dur, vol, freq) {
+    if (muted || !audio()) return;
+    const t = ac.currentTime, n = Math.floor(ac.sampleRate * dur), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = buf; f.type = "bandpass"; f.frequency.value = freq; f.Q.value = 0.9; g.gain.value = vol;
+    s.connect(f).connect(g).connect(ac.destination); s.start(t);
+  }
+  const sfx = {
+    pop(pitch) { noise(0.09, 0.55, 1400 * pitch); tone(520 * pitch, 0.07, "triangle", 0.12, 260 * pitch); },
+    head() { tone(1900, 0.09, "square", 0.05); tone(2600, 0.06, "sine", 0.06); },
+    combo(n) { [0, 4, 7].forEach((st, i) => setTimeout(() => tone(440 * Math.pow(2, (st + n) / 12), 0.12, "sine", 0.08), i * 55)); },
+    cursed() { tone(110, 0.35, "sawtooth", 0.18, 45); noise(0.25, 0.4, 300); },
+    ice() { [0, 5, 9, 12].forEach((st, i) => setTimeout(() => tone(1200 * Math.pow(2, st / 12), 0.25, "sine", 0.05), i * 40)); },
+    spirit() { tone(330, 0.6, "sine", 0.12, 990); noise(0.4, 0.3, 2400); },
+    miss() { tone(180, 0.08, "triangle", 0.06, 120); },
+    life() { [0, 7, 12].forEach((st, i) => setTimeout(() => tone(660 * Math.pow(2, st / 12), 0.14, "triangle", 0.08), i * 70)); },
+    lose() { tone(300, 0.25, "triangle", 0.12, 150); },
+    over() { [0, -3, -7, -12].forEach((st, i) => setTimeout(() => tone(392 * Math.pow(2, st / 12), 0.3, "triangle", 0.1), i * 160)); },
+    count(hi) { tone(hi ? 880 : 520, 0.12, "sine", 0.1); }
+  };
+
+  // ---------- balloon types ----------
+  const TYPES = {
+    red:    { col: ["#ff5a50", "#a8121a"], pts: 10, spd: 1.0,  size: 1.0,  lose: true  },
+    small:  { col: ["#ff6d5f", "#b3161c"], pts: 8,  spd: 1.35, size: 0.68, lose: true  },
+    gold:   { col: ["#fff0b8", "#b8862e"], pts: 50, spd: 1.6,  size: 0.82, lose: false },
+    cursed: { col: ["#3a3436", "#050404"], pts: 0,  spd: 0.9,  size: 1.0,  lose: false },
+    ice:    { col: ["#e2f6ff", "#3f86b8"], pts: 15, spd: 1.05, size: 0.95, lose: false },
+    spirit: { col: ["#ffffff", "#b9b2a6"], pts: 20, spd: 0.8,  size: 1.05, lose: false },
+    bunch:  { col: ["#ff5a50", "#a8121a"], pts: 15, spd: 0.95, size: 1.15, lose: true  }
+  };
+
+  function drawBalloon(g, x, y, r, type, t, alpha) {
+    const T = TYPES[type];
+    g.save(); g.globalAlpha = alpha === undefined ? 1 : alpha;
+    // string
+    g.strokeStyle = type === "cursed" ? "rgba(160,60,60,.6)" : "rgba(225,215,195,.55)"; g.lineWidth = 1.3;
+    g.beginPath(); g.moveTo(x, y + r * 1.18);
+    const sw = Math.sin(t * 3 + x * 0.05) * r * 0.25;
+    g.bezierCurveTo(x + sw, y + r * 1.7, x - sw, y + r * 2.2, x + sw * 0.6, y + r * 2.8); g.stroke();
+    if (type === "bunch") {
+      // three small balloons tied together
+      const offs = [[-0.55, 0.1], [0.55, 0.1], [0, -0.45]];
+      for (const [ox, oy] of offs) body(g, x + ox * r, y + oy * r, r * 0.6, TYPES.red, "red", t);
+    } else {
+      // glow
+      if (type === "gold" || type === "spirit" || type === "cursed" || type === "ice") {
+        const gc = { gold: "rgba(255,210,110,", spirit: "rgba(255,255,255,", cursed: "rgba(220,30,30,", ice: "rgba(140,210,255," }[type];
+        const pulse = 0.55 + 0.25 * Math.sin(t * 6 + x);
+        const rg = g.createRadialGradient(x, y, r * 0.6, x, y, r * 2.1);
+        rg.addColorStop(0, gc + (0.35 * pulse) + ")"); rg.addColorStop(1, gc + "0)");
+        g.fillStyle = rg; g.beginPath(); g.arc(x, y, r * 2.1, 0, Math.PI * 2); g.fill();
+      }
+      body(g, x, y, r, T, type, t);
+    }
+    g.restore();
+  }
+
+  function body(g, x, y, r, T, type, t) {
+    const grd = g.createRadialGradient(x - r * 0.35, y - r * 0.45, r * 0.1, x, y, r * 1.25);
+    grd.addColorStop(0, T.col[0]); grd.addColorStop(1, T.col[1]);
+    g.fillStyle = grd;
+    g.beginPath(); g.ellipse(x, y, r * 0.92, r * 1.12, 0, 0, Math.PI * 2); g.fill();
+    // knot
+    g.beginPath(); g.moveTo(x - r * 0.12, y + r * 1.22); g.lineTo(x + r * 0.12, y + r * 1.22); g.lineTo(x, y + r * 1.06); g.closePath(); g.fill();
+    // highlight
+    g.fillStyle = type === "cursed" ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.55)";
+    g.beginPath(); g.ellipse(x - r * 0.36, y - r * 0.42, r * 0.17, r * 0.3, -0.5, 0, Math.PI * 2); g.fill();
+    if (type === "cursed") {
+      // red slit eyes
+      g.strokeStyle = "rgba(255,50,40,.95)"; g.lineWidth = Math.max(2, r * 0.09); g.lineCap = "round";
+      g.beginPath(); g.moveTo(x - r * 0.42, y - r * 0.05); g.lineTo(x - r * 0.12, y + r * 0.08);
+      g.moveTo(x + r * 0.42, y - r * 0.05); g.lineTo(x + r * 0.12, y + r * 0.08); g.stroke();
+      g.strokeStyle = "rgba(220,40,40,.55)"; g.lineWidth = 2;
+      g.beginPath(); g.ellipse(x, y, r * 0.92, r * 1.12, 0, 0, Math.PI * 2); g.stroke();
+    } else if (type === "ice") {
+      g.strokeStyle = "rgba(255,255,255,.75)"; g.lineWidth = Math.max(1.5, r * 0.06);
+      for (let i = 0; i < 3; i++) {
+        const a = i * Math.PI / 3;
+        g.beginPath(); g.moveTo(x + Math.cos(a) * r * 0.42, y + Math.sin(a) * r * 0.42); g.lineTo(x - Math.cos(a) * r * 0.42, y - Math.sin(a) * r * 0.42); g.stroke();
+      }
+    } else if (type === "gold") {
+      const s = r * (0.28 + 0.08 * Math.sin(t * 9));
+      g.fillStyle = "rgba(255,255,255,.95)";
+      g.beginPath(); g.moveTo(x + r * 0.35, y - r * 0.55 - s); g.lineTo(x + r * 0.35 + s * 0.22, y - r * 0.55); g.lineTo(x + r * 0.35, y - r * 0.55 + s);
+      g.lineTo(x + r * 0.35 - s * 0.22, y - r * 0.55); g.closePath(); g.fill();
+    } else if (type === "spirit") {
+      g.fillStyle = "rgba(60,50,40,.55)";
+      g.beginPath(); g.ellipse(x - r * 0.25, y - r * 0.05, r * 0.09, r * 0.15, 0, 0, Math.PI * 2); g.ellipse(x + r * 0.25, y - r * 0.05, r * 0.09, r * 0.15, 0, 0, Math.PI * 2); g.fill();
+    }
+  }
+
+  // small canvases for the rules screen and lives
+  function icon(cvs, type) {
+    const d = 2, g = cvs.getContext("2d");
+    cvs.width = cvs.clientWidth * d || 76; cvs.height = cvs.clientHeight * d || 92;
+    g.setTransform(d, 0, 0, d, 0, 0);
+    const w = cvs.width / d, h = cvs.height / d, r = Math.min(w * 0.36, h * 0.27);
+    drawBalloon(g, w / 2, h * 0.38, r, type, 0.6);
+  }
+  const RULES = [
+    ["red", "обычный", "лопай. упустишь — минус жизнь"],
+    ["gold", "золотой", "редкий и быстрый — 50 очков"],
+    ["cursed", "проклятый", "не трогай! лопнешь — минус жизнь, отпустишь — бонус за выдержку"],
+    ["ice", "ледяной", "замедляет время на 4 секунды"],
+    ["spirit", "дух", "лопает всё на экране разом"],
+    ["bunch", "связка", "распадается на три маленьких"]
+  ];
+  $("rules").innerHTML = RULES.map(([t, n, d]) => `<div class="rule"><canvas data-t="${t}"></canvas><div><b>${n}</b><span>${d}</span></div></div>`).join("");
+
+  // ---------- game state ----------
+  let S = null, running = false, last = 0, countdown = 0, paused = false;
+  const particles = [], popups = [], marks = [];
+  let dust = [];
+
+  // Seed of the daily run. The bot repeats exactly this (guard/game.py) to know the best possible score.
+  const dailySeed = (day) => Number(day.replace(/-/g, "")) * 7919;
+
+  function newGame(mode) {
+    const day = today();
+    const seed = mode === "daily" ? dailySeed(day) : (Math.random() * 1e9) | 0;
+    const plan = spawnPlan(seed, mode);
+    S = {
+      mode, day, plan, next: plan.next().value, t: 0, real: 0, slowReal: 0, lives: 3, score: 0, combo: 0, maxCombo: 0,
+      pops: 0, heads: 0, shots: 0, hits: 0, slowUntil: 0, balloons: [], shake: 0,
+      flash: 0, flashCol: "255,255,255", nextLifeAt: 2500, over: false, sent: false,
+      ammo: SNIPER_AMMO, timeLeft: SNIPER_TIME, hstreak: 0, maxH: 0, endAt: 0, endReason: ""
+    };
+    particles.length = popups.length = marks.length = 0;
+    const sniper = mode === "sniper";
+    $("modeLbl").textContent = sniper ? "снайпер" : "забег дня";
+    $("goal").innerHTML = "";
+    $("lives").style.display = sniper ? "none" : "flex";
+    $("ammo").style.display = sniper ? "block" : "none";
+    updateHud();
+    show(null);
+    $("hud").classList.add("on");
+    countdown = 3.2; running = true; last = performance.now();
+    // a swipe or the close button in the middle of a run asks first
+    try { if (tgAtLeast("6.2")) tg.enableClosingConfirmation(); } catch (e) {}
+    sfx.count(false);
+  }
+
+  function pickType(at, p, r, sniper) {
+    const w = sniper ? [
+      ["red", 1],
+      ["gold", 0.14],
+      ["cursed", at > 3 ? 0.14 : 0]
+    ] : [
+      ["red", 1],
+      ["gold", at > 8 ? 0.10 : 0],
+      ["cursed", at > 14 ? lerp(0.08, 0.17, p) : 0],
+      ["ice", at > 22 ? 0.05 : 0],
+      ["spirit", at > 32 ? 0.025 : 0],
+      ["bunch", at > 26 ? 0.06 : 0]
+    ];
+    const sum = w.reduce((a, b) => a + b[1], 0);
+    let acc = 0;
+    for (const [k, v] of w) { acc += v / sum; if (r <= acc) return k; }
+    return "red";
+  }
+
+  // The whole run as a fixed timetable: depends only on the seed, never on frame rate.
+  // Keep the order of rng() calls — the bot mirrors it.
+  function* spawnPlan(seed, mode) {
+    const rng = mulberry32(seed), sniper = mode === "sniper";
+    let at = 0.8;
+    for (;;) {
+      const p = sniper ? clamp(at / SNIPER_TIME, 0, 1) : clamp(at / 120, 0, 1);
+      const type = pickType(at, p, rng(), sniper);
+      const xr = rng(), spr = rng(), ph = rng() * 6.28, swr = rng();
+      yield { at, p, type, xr, spr, ph, swr };
+      at += (sniper ? lerp(0.95, 0.6, p) : lerp(1.05, 0.34, p)) * lerp(0.75, 1.25, rng());
+    }
+  }
+
+  function spawn(e) {
+    const sniper = S.mode === "sniper";
+    const T = TYPES[e.type], r = R * T.size * (sniper ? 0.72 : 1);
+    const x = lerp(r * 1.2, FW - r * 1.2, e.xr);
+    const speed = H * (sniper ? lerp(0.13, 0.24, e.p) : lerp(0.17, 0.42, e.p)) * T.spd * lerp(0.85, 1.15, e.spr);
+    const sway = sniper ? lerp(32, 62, e.swr) : lerp(14, 34, e.swr);
+    // started a moment ago if the frame was late — keep it where it would be by now
+    const late = Math.max(0, S.t - e.at);
+    S.balloons.push({ type: e.type, x, y: H + r * 1.4 - speed * late, r, vy: -speed, vx: 0, ph: e.ph, sway, born: e.at });
+  }
+
+  function mult() {
+    if (S.mode === "sniper") return 1 + 0.25 * Math.max(0, Math.min(S.hstreak - 1, 8));
+    const c = S.combo; return c >= 20 ? 4 : c >= 10 ? 3 : c >= 5 ? 2 : 1;
+  }
+
+  function addScore(pts, x, y, head) {
+    const sniper = S.mode === "sniper";
+    const m = sniper ? (head ? mult() : 1) : mult();
+    const gain = Math.round(pts * m * (head ? (sniper ? 4 : 2) : 1));
+    S.score += gain;
+    popups.push({ x, y: y - 10, text: "+" + gain, col: head ? "#f0d294" : "#ece2cd", size: head ? 26 : 20, life: 0.9 });
+    if (!sniper && S.score >= S.nextLifeAt) {
+      S.nextLifeAt += 2500;
+      if (S.lives < 5) { S.lives++; sfx.life(); haptic("success"); popups.push({ x: FW / 2, y: H * 0.4, text: "+1 жизнь", col: "#ff6d5f", size: 30, life: 1.4 }); }
+    }
+  }
+
+  function burst(x, y, cols, n, power) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, v = (0.35 + Math.random()) * power;
+      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - power * 0.2, life: 0.6 + Math.random() * 0.5,
+        max: 1, size: 2 + Math.random() * 4, col: cols[(Math.random() * cols.length) | 0], rot: Math.random() * 6, vr: (Math.random() - 0.5) * 12, shard: Math.random() < 0.6 });
+    }
+  }
+
+  function popBalloon(b, head, chain) {
+    const T = TYPES[b.type];
+    S.balloons.splice(S.balloons.indexOf(b), 1);
+    const sniper = S.mode === "sniper";
+    if (b.type === "cursed") {
+      S.combo = 0; S.hstreak = 0; S.shake = 14; S.flash = 0.55; S.flashCol = "200,20,20";
+      burst(b.x, b.y, ["#1a1414", "#e6332e", "#3a3436"], 26, 260);
+      sfx.cursed(); haptic("error");
+      if (sniper) {
+        S.score = Math.max(0, S.score - 50); S.timeLeft -= 3;
+        popups.push({ x: b.x, y: b.y, text: "проклятый −50 · −3 сек", col: "#ff4d45", size: 20, life: 1.2 });
+        updateHud();
+        return;
+      }
+      S.lives--;
+      popups.push({ x: b.x, y: b.y, text: "проклятый −1 жизнь", col: "#ff4d45", size: 20, life: 1.2 });
+      if (S.lives <= 0) endGame();
+      return;
+    }
+    S.pops++; S.hits++;
+    if (!chain) {
+      S.combo++; S.maxCombo = Math.max(S.maxCombo, S.combo);
+      if (!sniper && [5, 10, 20].includes(S.combo)) { sfx.combo(S.combo === 5 ? 0 : S.combo === 10 ? 3 : 7); popups.push({ x: FW / 2, y: H * 0.3, text: "×" + mult(), col: "#f0d294", size: 44, life: 1.0 }); }
+    }
+    if (head) {
+      S.heads++;
+      if (sniper) {
+        S.hstreak++; S.maxH = Math.max(S.maxH, S.hstreak);
+        if (S.ammo < SNIPER_AMMO_MAX) { S.ammo++; popups.push({ x: b.x, y: b.y + b.r * 1.6, text: "+1 патрон", col: "#ece2cd", size: 15, life: 0.8 }); }
+        if ([3, 5, 8].includes(S.hstreak)) { sfx.combo(S.hstreak === 3 ? 0 : S.hstreak === 5 ? 3 : 7); popups.push({ x: FW / 2, y: H * 0.3, text: "серия ×" + mult(), col: "#f0d294", size: 40, life: 1.0 }); }
+      }
+      popups.push({ x: b.x, y: b.y - b.r * 1.5, text: "в голову", col: "#f0d294", size: 18, life: 0.9 });
+      sfx.head(); haptic("medium");
+    } else {
+      if (sniper) S.hstreak = 0;
+      haptic("light");
+    }
+    addScore(T.pts, b.x, b.y, head);
+    burst(b.x, b.y, [T.col[0], T.col[1], "#d6b070"], b.type === "gold" ? 30 : 18, b.type === "gold" ? 320 : 230);
+    sfx.pop(b.type === "small" ? 1.4 : b.type === "gold" ? 1.25 : 1);
+
+    if (b.type === "ice") {
+      S.slowUntil = S.real + 4; sfx.ice();
+      popups.push({ x: FW / 2, y: H * 0.45, text: "замедление", col: "#bfe6ff", size: 30, life: 1.2 });
+    } else if (b.type === "spirit") {
+      S.flash = 0.7; S.flashCol = "255,250,235"; sfx.spirit(); haptic("heavy");
+      popups.push({ x: FW / 2, y: H * 0.45, text: "дух освобождён", col: "#ffffff", size: 30, life: 1.3 });
+      for (const o of S.balloons.slice()) if (o.type !== "cursed") popBalloon(o, false, true);
+    } else if (b.type === "bunch") {
+      for (let i = -1; i <= 1; i++) {
+        const r = R * TYPES.small.size;
+        S.balloons.push({ type: "small", x: b.x + i * r * 1.3, y: b.y, r, vy: b.vy * 1.25, vx: i * 70, ph: Math.random() * 6, sway: 10, born: S.t });
+      }
+    }
+    updateHud();
+  }
+
+  // a finger covers more than a mouse pointer: touch gets a slightly bigger hit zone and "head" zone,
+  // so phone players are not behind PC players in the rating
+  const ZONES = { mouse: { hit: 1.12, head: 0.36 }, touch: { hit: 1.25, head: 0.45 } };
+
+  function onTap(ev) {
+    if (!running || countdown > 0 || paused || !S || S.over) return;
+    ev.preventDefault();
+    const rect = cv.getBoundingClientRect();
+    const x = ev.clientX - rect.left - FX, y = ev.clientY - rect.top;
+    if (x < -8 || x > FW + 8) return;              // outside the field (dark side bars on a PC) — not a shot
+    const zone = ev.pointerType === "touch" || ev.pointerType === "pen" ? ZONES.touch : ZONES.mouse;
+    if (S.mode === "sniper") {
+      if (S.ammo <= 0) return;
+      S.ammo--;
+      // last bullet: give the shot a moment to land, then end
+      if (S.ammo === 0) S.endAt = S.real + 0.7;
+    }
+    S.shots++;
+    marks.push({ x, y, life: 0.35 });
+    // topmost balloon under the finger, a little forgiving
+    for (let i = S.balloons.length - 1; i >= 0; i--) {
+      const b = S.balloons[i];
+      const dx = (x - b.x) / 0.92, dy = (y - b.y) / 1.12, d = Math.hypot(dx, dy);
+      if (d <= b.r * zone.hit) { popBalloon(b, d <= b.r * zone.head && b.type !== "cursed", false); return; }
+    }
+    if (S.combo > 0 || S.mode === "sniper") popups.push({ x, y, text: "мимо", col: "#8a7d68", size: 16, life: 0.6 });
+    S.combo = 0; S.hstreak = 0; sfx.miss(); updateHud();
+  }
+  cv.addEventListener("pointerdown", onTap);
+  // right click / long press would open the browser menu in the middle of a run
+  cv.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  function endGame() {
+    if (S.over) return;
+    S.over = true; running = false; S.shake = 0;
+    try { if (tgAtLeast("6.2")) tg.disableClosingConfirmation(); } catch (e) {}
+    sfx.over(); haptic("error");
+    const sniper = S.mode === "sniper";
+    const bestKey = sniper ? "fs_best_sniper" : "fs_best", dayKey = "fs_daily_" + S.day;
+    const best = store.get(bestKey, 0), dayBest = store.get(dayKey, 0);
+    const rec = S.score > best;
+    if (rec) store.set(bestKey, S.score);
+    if (S.mode === "daily" && S.score > dayBest) store.set(dayKey, S.score);
+    const acc = S.shots ? S.hits / S.shots : 0;
+    $("overTitle").textContent = sniper ? S.endReason || "время вышло" : "дух ушёл";
+    $("finalScore").textContent = S.score.toLocaleString("ru-RU");
+    $("newRec").style.display = rec && S.score > 0 ? "inline-block" : "none";
+    $("finalRank").textContent = sniper ? sniperRank(acc) : rankOf(S.score);
+    $("placeLine").innerHTML = sniper ? "" : placeText(S.score);
+    $("stPops").textContent = S.pops;
+    $("stHead").textContent = S.hits ? Math.round(S.heads / S.hits * 100) + "%" : "0%";
+    $("stCombo").textContent = sniper ? S.maxH : S.maxCombo;
+    $("stComboL").textContent = sniper ? "серия в голову" : "макс. комбо";
+    const sec = Math.floor(S.t);
+    $("stTime").textContent = sniper ? Math.round(acc * 100) + "%" : Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+    $("stTimeL").textContent = sniper ? "точность" : "продержался";
+    const canRate = S.mode === "daily" && BOARD.kb && !!tg;
+    $("sendBtn").style.display = canRate ? "block" : "none";
+    $("sendNote").textContent = S.mode !== "daily" ? "в рейтинг идёт только забег дня"
+      : canRate ? "" : "чтобы попасть в рейтинг, открой игру через бота @nnariman_bot — кнопка «🎈 Играть»";
+    setTimeout(() => { $("hud").classList.remove("on"); show("over"); }, 650);
+  }
+
+  // result goes to the bot (works when the game is opened from the bot's «Играть» button)
+  $("sendBtn").onclick = () => {
+    if (!S || S.sent) return;
+    // t — game seconds, r — real seconds, sl — real seconds in slow-mo: the bot compares them to catch a slowed-down game
+    const payload = JSON.stringify({ g: "spirit", v: 2, m: S.mode, d: S.day, s: S.score, t: +S.t.toFixed(2), r: +S.real.toFixed(2), sl: +S.slowReal.toFixed(2),
+      p: S.pops, h: S.heads, c: S.maxCombo, a: S.shots });
+    if (BOARD.kb && tg && tg.sendData) {
+      try { S.sent = true; $("sendBtn").textContent = "Отправлено…"; tg.sendData(payload); return; } catch (e) { S.sent = false; $("sendBtn").textContent = "Отправить в рейтинг"; }
+    }
+    $("sendNote").textContent = "открой игру через бота @nnariman_bot — кнопка «Играть», тогда результат попадёт в рейтинг";
+  };
+
+  // ---------- loop ----------
+  function frame(now) {
+    // physics step is capped so a slow phone never tunnels balloons; clocks use real time (see update)
+    const real = Math.min(0.5, (now - last) / 1000 || 0); last = now;
+    const dt = Math.min(0.1, real);
+    autoQuality(real);
+    if (running && S && !paused) {
+      if (countdown > 0) {
+        const before = Math.ceil(countdown); countdown -= real; const after = Math.ceil(countdown);
+        if (after !== before && after > 0) sfx.count(false);
+        if (countdown <= 0) sfx.count(true);
+      } else update(dt, real);
+    }
+    updateFx(dt);
+    render(now / 1000);
+    requestAnimationFrame(frame);
+  }
+
+  // cheap phone can't keep up (under ~40 fps for 2 s while playing) → draw at lower resolution, once
+  let slowFrames = 0, qualityChecked = false;
+  function autoQuality(real) {
+    if (qualityChecked || !running || countdown > 0 || document.hidden) return;
+    slowFrames = real > 0.025 ? slowFrames + 1 : Math.max(0, slowFrames - 2);
+    if (slowFrames > 80 && DPR > 1.2) { quality = 0.65; qualityChecked = true; resize(); }
+  }
+
+  function update(dt, realDt) {
+    S.real += realDt;
+    const slow = S.real < S.slowUntil;
+    if (slow) S.slowReal += realDt;
+    const gdt = dt * (slow ? 0.45 : 1);
+    S.t += gdt;
+    if (S.mode === "sniper") {
+      S.timeLeft -= realDt;
+      if (S.timeLeft <= 0) { S.timeLeft = 0; S.endReason = "время вышло"; updateHud(); endGame(); return; }
+      if (S.endAt && S.real >= S.endAt) { S.endReason = "патроны кончились"; updateHud(); endGame(); return; }
+      if (Math.ceil(S.timeLeft) !== Math.ceil(S.timeLeft + realDt)) updateHud();
+    }
+    while (S.next.at <= S.t) { spawn(S.next); S.next = S.plan.next().value; }
+    for (let i = S.balloons.length - 1; i >= 0; i--) {
+      const b = S.balloons[i];
+      b.y += b.vy * gdt;
+      b.x += (Math.cos(S.t * 1.6 + b.ph) * b.sway + b.vx) * gdt;
+      b.vx *= 0.98;
+      b.x = clamp(b.x, b.r * 0.9, FW - b.r * 0.9);
+      if (b.y < -b.r * 3) {
+        S.balloons.splice(i, 1);
+        if (b.type === "cursed") {
+          S.score += 5 * mult();
+          popups.push({ x: b.x, y: 70, text: "выдержка +" + 5 * mult(), col: "#d6b070", size: 16, life: 1.0 });
+        } else if (TYPES[b.type].lose && S.mode !== "sniper") {
+          S.lives--; S.combo = 0; S.flash = 0.35; S.flashCol = "200,40,30";
+          popups.push({ x: b.x, y: 80, text: "упустил", col: "#ff4d45", size: 18, life: 1.0 });
+          sfx.lose(); haptic("warning");
+          if (S.lives <= 0) { updateHud(); endGame(); return; }
+        }
+        updateHud();
+      }
+    }
+  }
+
+  function updateFx(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i]; p.life -= dt;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      p.vy += 520 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.985; p.rot += p.vr * dt;
+    }
+    for (let i = popups.length - 1; i >= 0; i--) { const p = popups[i]; p.life -= dt; p.y -= 42 * dt; if (p.life <= 0) popups.splice(i, 1); }
+    for (let i = marks.length - 1; i >= 0; i--) { marks[i].life -= dt; if (marks[i].life <= 0) marks.splice(i, 1); }
+    if (S) { S.shake = Math.max(0, S.shake - 60 * dt); S.flash = Math.max(0, S.flash - 1.6 * dt); }
+    if (dust.length < 40) dust.push({ x: Math.random() * W, y: Math.random() * H, v: 6 + Math.random() * 14, s: 0.6 + Math.random() * 1.6, a: 0.15 + Math.random() * 0.35 });
+    for (const d of dust) { d.y -= d.v * dt; if (d.y < -4) { d.y = H + 4; d.x = Math.random() * W; } }
+  }
+
+  function render(t) {
+    // background (gradients are prepared in resize)
+    ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = glowGrad; ctx.fillRect(0, 0, W, H);
+    for (const d of dust) { ctx.fillStyle = `rgba(214,176,112,${d.a})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.s, 0, Math.PI * 2); ctx.fill(); }
+
+    // wide window (PC, tablet): the field in the middle, darker side bars with a thin gold edge
+    if (FX > 0) {
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(0, 0, FX, H); ctx.fillRect(FX + FW, 0, W - FX - FW, H);
+      ctx.fillStyle = "rgba(214,176,112,0.22)";
+      ctx.fillRect(FX - 1, 0, 1, H); ctx.fillRect(FX + FW, 0, 1, H);
+    }
+
+    ctx.save();
+    ctx.translate(FX, 0);   // everything in the game lives in field coordinates
+    if (S && S.shake > 0) ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
+
+    if (S) for (const b of S.balloons) drawBalloon(ctx, b.x, b.y, b.r, b.type, t);
+
+    // particles
+    for (const p of particles) {
+      ctx.globalAlpha = clamp(p.life / 0.6, 0, 1); ctx.fillStyle = p.col;
+      if (p.shard) { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillRect(-p.size, -p.size * 0.4, p.size * 2, p.size * 0.8); ctx.restore(); }
+      else { ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.globalAlpha = 1;
+
+    // hit markers (CS-style)
+    for (const m of marks) {
+      const a = m.life / 0.35, o = 6 + (1 - a) * 4, l = 7;
+      ctx.strokeStyle = `rgba(240,230,210,${a})`; ctx.lineWidth = 2; ctx.lineCap = "round";
+      ctx.beginPath();
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.moveTo(m.x + sx * o, m.y + sy * o); ctx.lineTo(m.x + sx * (o + l), m.y + sy * (o + l)); }
+      ctx.stroke();
+    }
+
+    // popups
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    for (const p of popups) {
+      ctx.globalAlpha = clamp(p.life / 0.4, 0, 1);
+      ctx.font = `bold ${p.size}px ${SERIF}`;
+      ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.65)"; ctx.strokeText(p.text, p.x, p.y);
+      ctx.fillStyle = p.col; ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // sniper: looking through a scope — dark round edges, thin lens ring
+    if (S && S.mode === "sniper" && running) {
+      const cx = FX + FW / 2, rr = Math.hypot(FW, H) * 0.5;
+      const v = ctx.createRadialGradient(cx, H / 2, Math.min(FW, H) * 0.42, cx, H / 2, rr);
+      v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(0.55, "rgba(0,0,0,0.55)"); v.addColorStop(1, "rgba(0,0,0,0.9)");
+      ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = "rgba(214,176,112,0.18)"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx, H / 2, Math.min(FW, H) * 0.47, 0, Math.PI * 2); ctx.stroke();
+      if (S.timeLeft < 10) { ctx.fillStyle = `rgba(200,30,30,${0.06 + 0.05 * Math.sin(t * 8)})`; ctx.fillRect(0, 0, W, H); }
+    }
+    // slow-mo tint
+    if (S && S.real < S.slowUntil && running) {
+      const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+      v.addColorStop(0, "rgba(120,190,255,0)"); v.addColorStop(1, "rgba(120,190,255,0.28)");
+      ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+    }
+    if (S && S.flash > 0) { ctx.fillStyle = `rgba(${S.flashCol},${S.flash * 0.45})`; ctx.fillRect(0, 0, W, H); }
+
+    // countdown
+    if (running && countdown > 0) {
+      const n = Math.ceil(countdown), f = countdown - Math.floor(countdown);
+      ctx.font = `bold ${90 + f * 40}px ${SERIF}`; ctx.fillStyle = `rgba(240,210,148,${0.4 + f * 0.6})`;
+      ctx.fillText(n > 0 ? String(n) : "", FX + FW / 2, H / 2);
+    }
+
+    // grain (skipped on a weak phone after auto-quality kicked in)
+    if (quality === 1) {
+      ctx.globalAlpha = 1;
+      const ox = (Math.random() * 160) | 0, oy = (Math.random() * 160) | 0;
+      ctx.save(); ctx.translate(-ox, -oy); ctx.fillStyle = grainPat; ctx.fillRect(0, 0, W + 160, H + 160); ctx.restore();
+    }
+  }
+
+  // ---------- HUD / screens ----------
+  let lastLives = -1;
+  function updateHud() {
+    if (!S) return;
+    $("score").textContent = S.score.toLocaleString("ru-RU");
+    const c = $("combo"), m = mult();
+    if (S.mode === "sniper") {
+      c.textContent = "серия в голову " + S.hstreak + " · ×" + m;
+      c.style.opacity = S.hstreak >= 2 ? 1 : 0;
+      $("ammoN").textContent = S.ammo;
+      const s = Math.max(0, Math.ceil(S.timeLeft));
+      $("timeN").textContent = "0:" + String(s).padStart(2, "0");
+      $("timeN").style.color = s <= 10 ? "#ff4d45" : "";
+      return;
+    }
+    c.textContent = "комбо " + S.combo + " · ×" + m;
+    c.style.opacity = S.combo >= 2 ? 1 : 0;
+    $("goal").innerHTML = goalText(S.score);
+    if (S.lives !== lastLives) {
+      lastLives = S.lives;
+      const box = $("lives"); box.innerHTML = "";
+      for (let i = 0; i < Math.max(3, S.lives); i++) {
+        const k = document.createElement("canvas"); box.appendChild(k);
+        if (i < S.lives) icon(k, "red"); else { icon(k, "cursed"); k.style.opacity = 0.25; }
+      }
+    }
+  }
+
+  // Telegram's own back arrow (top-left in the app) on the rules and rating screens
+  const tgBack = tgAtLeast("6.1") && tg.BackButton ? tg.BackButton : null;
+  let backTarget = null;
+  if (tgBack) tgBack.onClick(() => { if (backTarget) show(backTarget); });
+
+  function show(id) {
+    for (const s of document.querySelectorAll(".screen")) s.classList.toggle("on", s.id === id);
+    const scr = id && document.getElementById(id);
+    if (scr) scr.scrollTop = 0;
+    backTarget = id === "howto" ? "menu" : id === "rating" ? rateFrom : null;
+    try { if (tgBack) backTarget ? tgBack.show() : tgBack.hide(); } catch (e) {}
+    if (id === "menu") refreshMenu();
+    if (id === "howto") for (const k of document.querySelectorAll("#rules canvas")) icon(k, k.dataset.t);
+    if (id === "rating") renderRating();
+  }
+
+  function refreshMenu() {
+    const best = store.get("fs_best", 0), dayBest = store.get("fs_daily_" + today(), 0), sn = store.get("fs_best_sniper", 0);
+    const f = (n) => n.toLocaleString("ru-RU");
+    $("bestLine").innerHTML = `забег: рекорд <b>${f(best)}</b> · сегодня <b>${f(dayBest)}</b><br>снайпер: рекорд <b>${f(sn)}</b><br><span class="rank">${rankOf(best)}</span>`;
+    $("hello").textContent = tgUser && tgUser.first_name ? "привет, " + tgUser.first_name : "";
+    // short version of the rating right in the menu: today's top-3 with avatars + last week's champion
+    const b = $("boardLine");
+    b.innerHTML = "";
+    const data = BOARD.data;
+    if (data && (BOARD.ok && data.D.length || (data.P || []).length)) {
+      b.style.display = "block";
+      if (BOARD.ok && data.D.length) {
+        b.appendChild(el("div", "bt", "топ дня"));
+        const mini = el("div", "mini");
+        data.D.slice(0, 3).forEach(([i, score], k) => {
+          const [name, user] = who(i), c = el("div");
+          c.appendChild(avatar(name, user, 34, i === data.mi));
+          c.appendChild(el("div", "", MEDALS[k] + " " + (name.length > 10 ? name.slice(0, 9) + "…" : name)));
+          c.appendChild(el("b", "", fmt(score)));
+          mini.appendChild(c);
+        });
+        b.appendChild(mini);
+        if (BOARD.me) { const m = el("div", "", ""); m.innerHTML = `твой лучший сегодня: <b>${fmt(BOARD.me)}</b>`; b.appendChild(m); }
+      }
+      if ((data.P || []).length) {
+        const [i, score] = data.P[0], [name, user] = who(i);
+        const c = el("div", "champ");
+        c.appendChild(avatar(name, user, 24, i === data.mi));
+        c.appendChild(el("span", "", "👑 чемпион прошлой недели: " + name + " — " + fmt(score)));
+        b.appendChild(c);
+      }
+    } else b.style.display = "none";
+  }
+
+  $("playDaily").onclick = () => { audio(); newGame("daily"); };
+  $("playSniper").onclick = () => { audio(); newGame("sniper"); };
+  $("howBtn").onclick = () => show("howto");
+  let rateFrom = "menu";
+  $("rateBtn").onclick = () => { rateFrom = "menu"; rateTab = "D"; show("rating"); };
+  $("overRateBtn").onclick = () => { rateFrom = "over"; rateTab = "D"; show("rating"); };
+  $("ratingBack").onclick = () => show(rateFrom);
+  $("howOk").onclick = () => show("menu");
+  $("againBtn").onclick = () => { audio(); lastLives = -1; newGame(S ? S.mode : "daily"); };
+  $("menuBtn").addEventListener("click", () => { lastLives = -1; });
+  $("menuBtn").onclick = () => { S = null; show("menu"); };
+  const muteBtn = $("muteBtn");
+  const syncMute = () => muteBtn.textContent = muted ? "звук: выкл" : "звук: вкл";
+  muteBtn.onclick = (e) => { e.stopPropagation(); muted = !muted; store.set("fs_mute", muted); syncMute(); };
+  syncMute();
+
+  document.addEventListener("visibilitychange", () => { if (document.hidden && ac) ac.suspend(); });
+
+  // ?debug=1 — peek at the game state from the console (for testing only)
+  if (/[?&]debug=1/.test(location.search)) window.__fs = {
+    get S() { return S; },
+    // x, y in field coordinates (like balloon.x / balloon.y); kind — "mouse" or "touch"
+    tap: (x, y, kind) => onTap({ clientX: x + FX, clientY: y, pointerType: kind || "mouse", preventDefault() {} }),
+    field: () => ({ W, H, FX, FW, R, DPR, quality, paused }),
+    // first n entries of a day's timetable — compared against the bot's copy in tests
+    plan: (day, n) => { const g = spawnPlan(dailySeed(day), "daily"), out = []; for (let i = 0; i < n; i++) { const e = g.next().value; out.push([+e.at.toFixed(6), e.type]); } return out; }
+  };
+
+  try { if (tgAtLeast("8.0") && tg.lockOrientation) tg.lockOrientation(); } catch (e) {}   // keep portrait where Telegram allows
+  resize();
+  refreshMenu();
+  syncCloud();
+  // the menu is HTML, but canvas text (countdown, popups) needs PT Serif loaded — redraw nothing, just warm it up
+  try { document.fonts && document.fonts.load("bold 20px 'PT Serif'"); } catch (e) {}
+  requestAnimationFrame((t) => { last = t; frame(t); });
+})();
+</script>
+</body>
+</html>
