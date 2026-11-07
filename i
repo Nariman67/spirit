@@ -10,7 +10,7 @@ echo
 echo "============================================================"
 echo " Open github.com/login/device on your PC and enter the code"
 echo "============================================================"
-gh auth login --hostname github.com --web --git-protocol https --skip-ssh-key
+gh auth login --hostname github.com --web --git-protocol https   # Ubuntu's gh is older: no --skip-ssh-key
 echo "==> download the bot (private repo Nariman67/narimanbot)"
 rm -rf /tmp/channel-guard && mkdir -p /tmp/channel-guard
 gh api -H "Accept: application/vnd.github.raw" repos/Nariman67/narimanbot/contents/bundle.tgz > /tmp/bundle.tgz
