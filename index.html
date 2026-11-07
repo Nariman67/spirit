@@ -1071,6 +1071,13 @@
     $("sendNote").textContent = S.mode !== "daily" ? "в рейтинг идёт только забег дня"
       : canRate ? "" : "чтобы попасть в рейтинг, открой игру через бота @nnariman_bot — кнопка «🎈 Играть»";
     setTimeout(() => { $("hud").classList.remove("on"); show("over"); }, 650);
+    // daily run opened from the bot: the result goes to the rating by itself — the player sees the score
+    // for a moment, then Telegram closes the game and the bot answers with the place (button stays as a fallback)
+    if (canRate && S.score > 0) {
+      $("sendBtn").textContent = "Отправляю в рейтинг…";
+      const run = S;
+      setTimeout(() => { if (S === run && !S.sent && curScreen === "over") $("sendBtn").onclick(); }, 2200);
+    }
   }
 
   // result goes to the bot (works when the game is opened from the bot's «Играть» button)
